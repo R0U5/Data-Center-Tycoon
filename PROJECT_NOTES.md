@@ -4,186 +4,76 @@
 
 ---
 
+## What the game is now
+
+A top-down, **turn-based economic tycoon**. You run a compute company on a procedurally
+generated map. **Demand lives at the towns**: each town emits compute demand (proportional to
+its size) that grows every **day**, and you can only serve a town with **data centers inside its
+service catchment** (the ring of tiles within `ServiceRadius` of it). The tension is per-town:
+
+- **Serving a town's demand makes money** — but only data centers in *that town's* catchment count.
+  Build out in open land with no town nearby and you serve nobody.
+- **Crowding a town makes it unhappy** — NIMBY. The penalty is *convex* in how much compute you've
+  packed into a town's catchment, normalised by a size-based "comfortable capacity". Pack a town
+  past comfort and its anger accelerates.
+- **Failing to meet demand also hurts** — brownouts (unmet demand, summed across towns) bite happiness.
+
+**Terrain has mechanical roles too:**
+- **River = cooling.** Tiles near a river (within `CoolingRadius`) run at half operating cost, so you
+  want your data centers hugging the water. (Towns are anchored near rivers, so each catchment has
+  contested cool frontage.) You **cannot build on river or town tiles**.
+- **Forest = buffer.** Forest left standing inside a town's catchment **reduces that town's NIMBY**
+  (it screens the eyesore). A town's catchment grass is its comfortable cap; once that runs out you
+  can **clear forest** to keep serving — but it costs `FOREST_BUILD_MULT`× and removes the buffer.
+
+Demand grows ~5.5%/day forever, so eventually each town demands more than its surroundings can
+*comfortably* host. To keep every town fully served you must over-pack them, and they revolt.
+Skilled play serves each town up to ~its comfortable capacity, builds on cheap cooled grass, keeps
+forest standing, accepts the growing brownout, and banks the cash goal first. **Difficulty comes
+from the map**: a town boxed in by river/forest/other towns has a small grass catchment (low hard
+cap), so it's the bottleneck.
+
+**You win** by reaching the cash goal; **you lose** if happiness collapses or you go bankrupt.
+
+This replaces two earlier designs: the original "drag red rectangles, watch a happiness number" toy,
+and the interim **global-footprint** model (happiness = convex penalty on *total* tiles covered,
+weighted by land type). If you read either of those in an old note or commit, they are obsolete —
+happiness is now driven by *per-town crowding*, not total coverage.
+
+---
+
 ## Quick Start
 
+Primary dev environment is **Windows 11** (Arial font present, MonoGame templates installed):
+
 ```powershell
-cd C:\Users\willi\Desktop\local_code\data-center-tycoon
+cd <repo>
 dotnet run
 ```
 
-To rebuild after edits: if the previous build is still running, the `.exe` will be locked. Kill it first:
+Rebuild after edits (kill the running game first — the `.exe` locks):
 
 ```powershell
 Get-Process -Name "DataCenterTycoon" -ErrorAction SilentlyContinue | Stop-Process -Force
 dotnet build
 ```
 
----
+### Building on Linux / CI (gotcha)
 
-## Project Overview
+The content pipeline builds `Content/Font.spritefont`, which references **Arial**. Arial is a
+Windows font and is **not** present on a stock Linux box, so the content build fails there with
+`Could not find "Arial" font file` (installing `fonts-liberation` does **not** fix it — MonoGame's
+`FontDescriptionProcessor` resolves the font by file/family, not via fontconfig aliases).
 
-A top-down 2D resource management game. The player places "data centers" (red rectangles) on a procedurally generated map. The map has terrain features (river, forests, towns) generated from Perlin noise. The game tracks two derived values that respond to the player's placement decisions:
+To **compile-check the C# only** on Linux (skips the content build):
 
-- **Happiness** — starts at 100%, drops as the map is covered in red, drops faster over river/town tiles
-- **Money** — increases as Happiness decreases, at a 0.5-to-1 ratio, displayed in USD
-
-Eventually the data centers will have multiple variables and a formula combining them; the `Value` field on `DataCenter` is the placeholder for that.
-
----
-
-## Tech Stack & Environment
-
-- **Language**: C# (top-level statements in `Program.cs`, classes elsewhere)
-- **Framework**: .NET 8 (downgraded from net9 template — the .NET 8 SDK is what's installed)
-- **Game framework**: MonoGame 3.8 DesktopGL (`mgdesktopgl` template)
-- **SDK location**: `C:\Program Files\dotnet\dotnet.exe` (the `dotnet` command is not in PATH by default — call the exe directly)
-- **OS**: Windows 11
-- **Working directory**: `C:\Users\willi\Desktop\local_code\data-center-tycoon`
-
-If on a fresh machine, install the .NET 8 SDK and MonoGame templates:
-```powershell
-winget install --id Microsoft.DotNet.SDK.8 --source winget --accept-source-agreements --accept-package-agreements --silent
-dotnet new install MonoGame.Templates.CSharp
+```bash
+dotnet build -p:EnableMGCBItems=false
 ```
 
----
-
-## File Structure
-
-```
-data-center-tycoon/
-├── Program.cs                  # entry point — calls game.Run()
-├── Game1.cs                    # main Game class: input, drawing, happiness/money
-├── DataCenter.cs               # DataCenter class (Bounds + Value)
-├── MapGenerator.cs             # Perlin-driven map generation
-├── Noise.cs                    # hand-rolled 2D Perlin noise
-├── DataCenterTycoon.csproj     # net8.0, DesktopGL, content builder task
-├── save.dat                    # seed file (created on first run, in CWD)
-├── app.manifest
-├── Icon.bmp / Icon.ico
-├── Content/
-│   ├── Content.mgcb            # content pipeline config
-│   └── Font.spritefont         # Arial 20pt
-└── bin/, obj/                  # build output
-```
-
----
-
-## Current Features
-
-1. **1920×1080 window** with grass-green background
-2. **Procedural map** generated from a seed:
-   - 1 **river** — largest connected component of low-elevation tiles (Perlin field, threshold 0.32)
-   - 2 **forests** — two largest connected components of high-moisture tiles (Perlin field, threshold 0.62)
-   - 3 **towns** — sized 22 / 16 / 10 tiles (Portsmouth / Middletown / Newport ratios) on Aquidneck Island
-3. **Seed persistence** via `save.dat` in the working directory
-4. **Mouse drag** to create a data center (rubber-band rectangle); release to place
-5. **Happiness** calculation: weighted by what terrain the data center covers (river=2x, town=3x, others=1x)
-6. **Money** calculation: 0.5× the happiness decrease
-7. **HUD** in top-left: "Happiness: XX" and "Money: $X.XX"
-
----
-
-## Architecture
-
-### Class diagram (text)
-
-```
-Program
-  └── new Game1() → calls game.Run()
-
-Game1 : Game
-  ├── _map: MapGenerator            (the current map)
-  ├── _dataCenters: List<DataCenter> (placed data centers)
-  ├── _activeRect: Rectangle?        (the rubber-band during drag)
-  ├── _pixel: Texture2D              (1×1 white texture, used for all rectangle drawing)
-  ├── _font: SpriteFont              (Arial 20pt, built via content pipeline)
-  ├── Update()                       (input handling, drag state)
-  ├── Draw()                         (orchestrates the render layers)
-  ├── CalculateHappiness()           (recomputed every frame in Draw)
-  ├── FillRect / OutlineRect         (helpers using _pixel)
-  └── LoadOrCreateMap / StartNewGame (seed persistence)
-
-DataCenter
-  ├── Bounds: Rectangle              (pixel-space rectangle on the play area)
-  └── Value: int                     (currently = Bounds.Width * Bounds.Height, placeholder for future formula)
-
-MapGenerator
-  ├── Tiles: TileType[,]             (48×27 grid)
-  ├── Seed: long                     (for reproducibility / save file)
-  ├── _elevation: float[,]           (Perlin field, [0,1])
-  ├── _moisture: float[,]            (Perlin field, [0,1], different seed)
-  ├── IdentifyRiver()                (BFS for largest low-elevation component)
-  ├── PlaceForests()                 (BFS for 2 largest high-moisture components, with river buffer)
-  ├── PlaceTowns()                   (3 towns in size order, near river, with forest buffer)
-  ├── GrowCluster()                  (organic random-growth, used by PlaceTowns)
-  ├── IsForbidden / IsNearType       (avoid + buffer logic)
-
-Noise
-  ├── _perm: int[512]                (permutation table, seeded)
-  ├── Sample(x, y)                   (returns ~[-1, 1])
-  └── uses 5th-order fade + gradient dots
-```
-
-### Render layers (back to front)
-
-1. Background (grass green)
-2. Map tiles (river blue, town brown, forest dark green) — drawn in `DrawMap()`
-3. Data centers (red fill + outline) — drawn in `DrawDataCenters()`
-4. Active drag rectangle (translucent blue + outline) — drawn in `DrawActiveRect()`
-5. HUD (Happiness, Money) — drawn in `DrawHappiness()` + `DrawMoney()`
-
----
-
-## Key Formulas
-
-### Happiness
-
-```
-covered = unique tiles inside any data center rectangle
-(empty * 1 + river * 2 + town * 3 + forest * 1) → weighted
-happiness = 100 - (weighted / 1296) * 100
-```
-
-Forest is 1× because the user only specified river (2×) and town (3×) multipliers. If they want forest penalized differently, change the line in `CalculateHappiness()`.
-
-Overlapping data centers do NOT double-count tiles — `covered` is a `bool[,]` that's set once and read once per frame.
-
-### Money
-
-```
-money = (100 - happiness) * 0.5
-```
-
-Displayed with `ToString("C", en-US)` → `$1,234.56` format. Max possible is $50.00 (covers entire map with 1× tiles, which isn't possible given the penalties).
-
-### Town size math
-
-Aquidneck Island is ~3.7% of Rhode Island. The map is sized so 1 tile ≈ 0.8 sq mi:
-- Portsmouth target 22 tiles → 17.6 sq mi (real: 17.1)
-- Middletown target 16 tiles → 12.8 sq mi (real: 13.0)
-- Newport target 10 tiles → 8.0 sq mi (real: 7.7)
-
-48 total town tiles = exactly 3.7% of the 1296-tile map. Don't change the grid/tile size without rethinking the scales.
-
----
-
-## Tunable Constants (single-line changes)
-
-| Constant | Value | Location | Effect |
-|---|---|---|---|
-| `WindowWidth` / `WindowHeight` | 1920 / 1080 | `Game1.cs:8-9` | Window size |
-| `MapGenerator.TileSize` | 40 | `MapGenerator.cs:11` | Tile size in pixels |
-| `MapGenerator.GridWidth` / `GridHeight` | 48 / 27 | `MapGenerator.cs:12-13` | Grid dimensions |
-| River elevation threshold | 0.32 | `MapGenerator.cs:42` | Lower = smaller river, higher = bigger |
-| Moisture threshold | 0.62 | `MapGenerator.cs:84` | Lower = bigger forests |
-| River buffer for forests | 1 tile | `MapGenerator.cs:85` | Distance forests stay from river |
-| Forest buffer for towns | 2 tiles | `MapGenerator.cs:139` | Distance towns stay from forests |
-| Elevation noise scale | 0.05 | `MapGenerator.cs:34` | Smaller = larger features |
-| Moisture noise scale | 0.05 × 1.3 | `MapGenerator.cs:35` | Slightly finer than elevation |
-| Town sizes | 22 / 16 / 10 | `MapGenerator.cs:124` | Don't change without re-scaling map |
-| Moisure seed offset | 7919 | `MapGenerator.cs:30` | Arbitrary prime for decorrelation |
-| Town RNG seed offset | 31337 | `MapGenerator.cs:122` | Arbitrary; separate from elevation/moisture seeds |
+If you ever need a full Linux build, swap the spritefont's `<FontName>` to a font installed on the
+machine (e.g. `Liberation Sans`) — but do **not** commit that change, since it would alter the
+look on the user's Windows build.
 
 ---
 
@@ -191,114 +81,256 @@ Aquidneck Island is ~3.7% of Rhode Island. The map is sized so 1 tile ≈ 0.8 sq
 
 | Input | Action |
 |---|---|
-| Hold LMB + drag | Draw a rubber-band rectangle (blue) |
-| Release LMB | Place the rectangle as a data center (turns red) |
-| N | New game (new seed → new map, clears data centers) |
-| R | Reset data centers (keeps current map) |
-| Esc | Quit |
+| Left-drag | Build a block of data centers (tile-snapped) — build inside a town's tinted catchment to serve it; blue tiles are cooled (cheap upkeep). Preview shows cost; red = invalid (overlaps / on river or town / unaffordable). |
+| Left-click | Build a single tile. |
+| Right-click | Remove the data center under the cursor (50% refund). |
+
+You cannot build on **river** or **town** tiles. Building on **forest** is allowed but costs
+`FOREST_BUILD_MULT`× and removes that town's buffer.
+| Space | Advance to the next day (earn profit, update happiness, demand grows). |
+| R | Retry the **same** map (reset money/day/demand/happiness, clear data centers). |
+| N | New map (new seed) and reset. |
+| Esc | Quit. |
+
+You cannot build on top of an existing data center (placement is rejected if it overlaps).
 
 ---
 
-## Visual Design
+## Win / Lose
 
-All colors are `static readonly Color` at the top of `Game1.cs`:
+Checked at the end of each **Advance Day**:
 
-| Element | RGB | Notes |
+- **Win** — cash `>= WIN_CASH_GOAL` ($6,000).
+- **Lose (revolt)** — happiness `< HAPPINESS_LOSE` (35).
+- **Lose (bankrupt)** — money `< 0`.
+
+End screen shows the outcome and `R` (retry map) / `N` (new map). Happiness `< HAPPINESS_WARN` (50)
+shows a warning banner while playing.
+
+---
+
+## The economic model (the heart of the game)
+
+All constants live at the top of `Game1.cs`. The model is mirrored in `tools/balance_sim.py`
+so balance can be re-tuned without launching the game — **keep the two in sync.**
+
+**Per-town quantities.** Town `t` has a `Size` (its tile count). The map assigns every cell to a
+nearest town within `ServiceRadius` (`MapGenerator.CatchmentTown[x,y]`, `-1` = no service).
+- `demand_t  = (Size_t / Σ Size) * totalDemand`            — bigger town, bigger share
+- `supply_t  = #(your data-center tiles in town t's catchment)`
+- `served_t  = min(demand_t, supply_t)`
+- `comfort_t = COMFORT_PER_SIZE * Size_t`                  — low-anger capacity (3.85 * size)
+
+Each day, when you press Space (`AdvanceDay`):
+
+```
+served   = Σ served_t
+revenue  = REVENUE_PER_SERVED * served                              # 2.7 per served unit
+opCost   = OP_COST_PER_TILE * (tileCount - cooledTiles*(1-COOLED_OP_FACTOR))   # cooled tiles at 0.5x
+money   += revenue - opCost
+
+# happiness eases toward a target (fast down, slow up)
+relief_t = BUFFER_RELIEF * min(1, preservedForest_t / (BUFFER_PER_SIZE*Size_t)) # forest screen, <=0.20
+nimby    = Σ  NIMBY_WEIGHT * (supply_t / comfort_t)^NIMBY_EXP * (1 - relief_t)   # 14 * (packing)^2.2
+brownout = BROWNOUT_WEIGHT * (1 - served / Σ demand_t)             # 50 * overall shortfall
+target   = 100 - nimby - brownout
+rate     = (target < happiness) ? HAPPINESS_FALL : HAPPINESS_RISE  # 0.55 down / 0.16 up
+happiness += rate * (target - happiness)
+
+totalDemand *= 1 + DAILY_DEMAND_GROWTH          # +5.5%/day
+```
+
+`cooledTiles` = your tiles on cooled cells (`MapGenerator.Cooled`, within `CoolingRadius` of a river).
+`preservedForest_t` = forest tiles in town t's catchment you have **not** built over (clearing forest
+to serve removes the buffer and raises that town's anger).
+
+**Why this creates per-town pressure (and kills "serve everyone"):**
+- NIMBY is **convex (^2.2)** in how much you've packed a town's catchment relative to its comfortable
+  capacity. Up to ~comfort it's cheap; past it, anger accelerates hard.
+- `demand_t` grows ~5.5%/day, so each town's demand eventually exceeds its comfortable capacity. To
+  fully serve it you must pack past comfort → the town reddens and happiness falls.
+- A town's **hard serving cap = its catchment capacity** (buildable cells within `ServiceRadius`),
+  which is set by the map. A town boxed in by river/forest/other towns can't be fully served at all
+  → permanent brownout. This is the map-driven difficulty.
+- So "meet every town's full demand" **loses**. Serve each town up to ~comfort, accept the brownout,
+  bank the cash goal before happiness erodes.
+
+Happiness is **stateful** (a field that eases toward the target each day), so a bad day lingers and
+recovery is slow (fall 0.55, rise 0.16).
+
+Tiles placed **outside any catchment** serve nobody and generate no NIMBY, but still cost upkeep —
+pure waste. The faint per-town tint on the map shows each town's catchment.
+
+### Validated balance (see `tools/balance_sim.py`, and verified on real maps)
+
+| Strategy | Outcome |
+|---|---|
+| Meet every town's full demand (naive) | **REVOLT** ~day 18–20 (packs towns past comfort) |
+| Serve each town to ~0.9–1.0× comfort (skilled) | **WIN** ~day 26–28 |
+| Over-pack to 1.1× comfort | mostly **REVOLT** |
+
+The C# economy (cooling + forest buffer included) was run against **actual generated maps** (real
+catchments): naive loses on 16/16 seeds, skilled comfort-0.9 wins on 16/16, comfort-1.0 on 15/16,
+over-pack comfort-1.1 on only 2/16.
+
+---
+
+## Tunable constants (single-line changes in `Game1.cs`)
+
+| Constant | Value | Effect |
 |---|---|---|
-| Background (grass) | `(90, 170, 90)` | Set in last session |
-| River | `(60, 110, 200)` | Blue |
-| Town | `(160, 110, 70)` | Brown |
-| Forest | `(30, 80, 30)` | Dark green (set in last session) |
-| Data center fill | `(220, 70, 70)` | Red |
-| Data center outline | `(255, 130, 130)` | Lighter red |
-| Active drag fill | `(80, 160, 230) * 0.25` | 25% alpha blue |
-| Active drag outline | `(150, 210, 255)` | Light blue |
-| Text | `Color.White` | HUD only |
+| `START_MONEY` | 650 | Early-game tightness |
+| `WIN_CASH_GOAL` | 6000 | How long/hard the run is (raise = longer) |
+| `COST_PER_TILE` | 12 | Build cost (one-time) |
+| `REFUND_FRACTION` | 0.5 | Refund on removal |
+| `OP_COST_PER_TILE` | 1.0 | Daily upkeep per tile |
+| `COOLED_OP_FACTOR` | 0.5 | Upkeep multiplier for cooled (near-river) tiles |
+| `REVENUE_PER_SERVED` | 2.7 | Income per served compute unit |
+| `FOREST_BUILD_MULT` | 2.5 | Build-cost multiplier to clear forest |
+| `BASE_DEMAND` | 100 | Day-1 total demand (split across towns by size) |
+| `DAILY_DEMAND_GROWTH` | 0.055 | The doom clock — higher = shorter game |
+| `NIMBY_WEIGHT` | 14 | How much crowding a town hurts |
+| `NIMBY_EXP` | 2.2 | Convexity of the crowding penalty (>1 accelerates) |
+| `COMFORT_PER_SIZE` | 3.85 | Comfortable compute capacity per town tile |
+| `BROWNOUT_WEIGHT` | 50 | How much overall under-serving hurts |
+| `BUFFER_RELIEF` | 0.20 | Max NIMBY reduction from preserved forest |
+| `BUFFER_PER_SIZE` | 1.0 | Forest tiles per town tile needed for full relief |
+| `HAPPINESS_FALL` / `HAPPINESS_RISE` | 0.55 / 0.16 | Resentment fast, trust slow |
+| `HAPPINESS_LOSE` / `HAPPINESS_WARN` | 35 / 50 | Lose threshold / warning |
+| `MapGenerator.ServiceRadius` | 6 | Catchment size → each town's hard serving cap |
+| `MapGenerator.CoolingRadius` | 2 | How far river cooling reaches |
+
+To re-tune: edit the constants in **both** `Game1.cs` and `tools/balance_sim.py`, run
+`python3 tools/balance_sim.py`, and confirm naive play still loses and skilled play still wins.
+`tools/balance_sim.py` abstracts geometry via representative catchment capacities (the measured
+`126/100/81` for `ServiceRadius=6`); to check against real maps, run the economy over actual
+`MapGenerator` instances (a throwaway harness referencing `MapGenerator.cs` + `Noise.cs`).
 
 ---
 
-## Persistence Model
+## Architecture
 
-- **File**: `save.dat` in the current working directory (the project folder when running via `dotnet run`)
-- **Format**: plain text, the seed number on one line
-- **Behavior on startup**: load seed if file exists, else generate one with `Environment.TickCount64` and write it
-- **Behavior on N**: generate a new seed, write it, regenerate the map, clear data centers
-- **R key**: clears data centers only, does NOT touch the save file or map
+```
+Program.cs        entry point -> new Game1().Run()
 
-Data centers are NOT persisted — they reset on app restart. If the user wants this saved too, that's a future task.
+Game1 : Game      everything: input, economy, happiness, rendering, save/load
+  state:          _money, _computeDemand (total), _townSupply[] (per town),
+                  _townSizeDenom, _tileCount, _happiness, _day, _state (Playing/Won/Lost)
+  _dataCenters:   List<DataCenter> (placed blocks; never overlap)
+  Update          input -> placement / removal / Space-advance / R / N / Esc
+  AdvanceDay      profit, StepHappiness, demand growth, win/lose check, save
+  RecalculateCoverage   recomputes tileCount + per-town supply (via CatchmentTown)
+  DemandServed / NimbyTotal / HappinessTargetNow   the per-town economy + happiness
+  ProjectedHappiness / StepHappiness               ease happiness toward target
+  Draw            map -> catchment tint -> towns(anger) -> data centers ->
+                  active drag -> per-town gauges -> HUD -> end screen
+  SaveGame / LoadGame    full-state persistence (see below)
+
+DataCenter        Bounds (tile-snapped Rectangle) + Cost. (The old unused `Value` field is gone.)
+
+Town              Id, Tiles, Size, Center, CatchmentCapacity. (in MapGenerator.cs)
+
+MapGenerator      Perlin map: river, 2 forests, 3 towns. 48x27 grid, 40px tiles.
+  Towns            List<Town> (tracked components; Size, Center, CatchmentCapacity, ForestInCatchment)
+  CatchmentTown    int[GW,GH]  nearest town within ServiceRadius, else -1 (multi-source BFS)
+  Cooled           bool[GW,GH] empty/forest cells within CoolingRadius of a river
+  PlaceTownsConsiderate   retries town layout (~140x), keeps the first/best layout where every
+                          town clears MinCapacity = 3*size (wider spacing, prefers open ground)
+Noise             hand-rolled 2D Perlin noise.
+```
+
+**Considerate generation.** River and forests are generated as before. Towns are the part that
+matters for the economy, so `PlaceTownsConsiderate` tries up to 140 layouts and **breaks as soon as
+every town clears `MinCapacity = 3 * size`** (empty cells within `ServiceRadius`, assigned to nearest
+town), else keeps the best-scoring. It uses wider town spacing (≥4) and prefers anchors with open
+ground (`CountEmptyNear`). **~97% of seeds** are fully fair (up from ~85%); the rest have one tighter
+town and are rerollable with `N`/`R`. Measured average capacities at `ServiceRadius=6`: ~`123 / 109 /
+109` for the `22 / 16 / 10` towns; the big town runs proportionally short (it's the bottleneck), which
+the balance accounts for. `ComputeCooling` then marks near-river cells, and each town records its
+`ForestInCatchment` (for the buffer).
+
+---
+
+## Persistence
+
+- **File**: `save.dat` in the working directory.
+- **Saved**: on every placement/removal, every Advance Day, and on new/reset.
+- **Format** (`v2`, line-based, invariant culture):
+  ```
+  v2
+  seed=<long>
+  day=<int>
+  money=<float>
+  demand=<float>
+  happiness=<float>
+  state=Playing|Won|Lost
+  dc=<x>,<y>,<w>,<h>,<cost>     (one per data center)
+  ```
+- **Legacy**: a file that is just a number is treated as a seed-only save (old format) → starts a
+  fresh game on that map.
+- On startup the full game (map, money, day, demand, happiness, placed data centers, win/lose
+  state) is restored. Parsing is defensive: any failure falls back to a new game.
 
 ---
 
 ## Conventions
 
-- **No comments in code** (user explicitly asked for this — even on tricky bits)
-- Namespace: `DataCenterTycoon` for everything
-- Tile coordinates are `(x, y)` with `(0, 0)` at top-left
-- All public-facing names use PascalCase, private fields use `_camelCase`
-- Avoid list pattern for `GrowCluster`: `TileType[]` of types to never grow onto
-- Buffer pattern: `(TileType, int)[]` of (type, Chebyshev distance) to stay away from
-- Colors are `static readonly Color` at top of `Game1.cs`, not scattered
-- Don't add features the user didn't ask for — when they say "consider X", they want discussion, not silent implementation
+- **No comments in code** (user preference — even on tricky bits).
+- Namespace `DataCenterTycoon` for everything; PascalCase public, `_camelCase` private fields.
+- Colors are `static readonly Color` at the top of `Game1.cs`.
+- Tile coords `(x, y)`, `(0,0)` top-left.
+- Don't add features the user didn't ask for. When they say "consider X", they want discussion,
+  not silent implementation.
 
 ---
 
-## Pending / Future Work
+## Known issues / future work
 
-The project is "done for now" but explicitly unfinished. Known next steps the user has hinted at:
-
-1. **Multiple variables + formula on DataCenter** — `Value` is currently just area. The user said: "this value will come into play later when we have multiple variables to consider and a formula to deal with them all". Likely candidates: power draw, cooling cost, throughput, build cost.
-2. **Game over / win conditions** — what happens when happiness hits 0? Is there a target?
-3. **Spending the money** — right now money is a passive counter. Probably should be spendable (on upgrades, larger data centers, etc.)
-4. **Time-based dynamics** — happiness and money could change over time, not just on placement
-5. **Data center placement constraints** — currently you can place anywhere, including on rivers/forests/towns. The user has flagged this as unrealistic in earlier sessions but never asked to enforce it.
-6. **Save data center positions** — survive app restarts
-7. **More terrain features** — the user mentioned ore veins, oil fields, etc. as future possibilities
-8. **Sound, music, polish** — none yet
-
-The original three techniques suggested but not implemented:
-- **Wave Function Collapse** — for structured layouts (cities, roads). Skipped as overkill.
-- **Voronoi Diagrams** — for territory/district division. Skipped as wrong tool.
-Both could be added later if districts or detailed cityscapes become needed.
+- **HUD overlaps the top-left play area.** The translucent HUD panel sits over the map; you can
+  still build under it, but it's visually obscured. A dedicated sidebar or map offset would be
+  cleaner.
+- **No audio, no animation/tweening.** Purely functional rendering.
+- **~3% of seeds have one tighter town.** Considerate generation guarantees a fair catchment on ~97%
+  of seeds; the rest are harder (one boxed-in town) and rerollable with `N`/`R`. A hard guarantee
+  (shrink/relocate a boxed town, or scale its demand to capacity) is possible if needed.
+- **`DataCenter` is still just area.** A future "multiple variables + formula" (power, throughput,
+  tiers) would add fields here feeding supply/cost/NIMBY.
+- **Terrain mechanics are simple.** River = flat cooling discount near water; forest = NIMBY buffer +
+  clear-at-cost. No power grid, elevation, or coastline (those were considered and deferred).
+- **No difficulty settings / no endless mode past the win.** The run ends at the cash goal.
 
 ---
 
-## Known Issues / Edge Cases
-
-- **Town placement is best-effort** — if no valid spot is found in 200 attempts, the town is silently skipped. With 3 towns on a small map, this is rare but possible.
-- **Data center rectangles that don't cover a full tile still count** — any tile whose 40×40 box intersects the data center counts. Edge case for very thin rectangles.
-- **No bounds check on data center placement** — you can place a rectangle that extends beyond the window, and its tiles past the edge won't be counted in happiness (clamped to grid in `CalculateHappiness`).
-- **Active rectangle has no min size** — you can place a 0×0 rectangle (it's filtered out at release time).
-- **No undo for data center placement** — only `R` clears all of them.
-- **The .exe locks during a running game** — rebuild requires killing the process first (see Quick Start).
-
----
-
-## Decision Log
+## Decision log (terrain-roles iteration — latest)
 
 | Decision | Why |
 |---|---|
-| MonoGame over Pygame/HTML5 | User chose C# + MonoGame; we installed .NET 8 SDK for it |
-| Perlin noise over simpler value noise | User specifically suggested "Perlin Noise with Stepping" in their analysis of options |
-| Stepping = single binary threshold per field (not multi-tier plateaus) | User wanted "flat plateaus" but for v1 binary threshold is sufficient; could revisit |
-| Two forests (not 1) | User asked for 2 in an earlier turn |
-| Organic random-growth for town shape (not 4×4 square) | User asked for more randomized shapes |
-| 3 towns (not 1) at Aquidneck ratios | User specified Portsmouth/Middletown/Newport percentages and Rhode Island scale |
-| `save.dat` in CWD (not `%APPDATA%`) | Simplest for prototype; easy to find and delete |
-| Forest = 1× in happiness formula | User only specified river (2×) and town (3×); forest was implicit default |
-| Money starts at $0 | No other starting value was specified |
-| `$#,##0.00` via `ToString("C", en-US)` | "Real US dollars" was the user's phrasing |
-| Grid snap NOT applied to data center placement | User never asked for it; current behavior is freeform drag |
+| River = cooling: near-river tiles run at half upkeep; river/town tiles unbuildable | User asked to give river/forest real roles. Cooling is classic data-center logic; towns are river-anchored so each catchment has contested cool frontage. |
+| Forest = buffer: preserved catchment forest cuts NIMBY (≤20%); clearing it costs 2.5× and removes the buffer | Makes forest a strategic reserve (keep it calm, or clear it for late-game capacity), tying a second terrain type to the economy. |
+| Bumped `NIMBY_WEIGHT` 11→14 | Offsets the ~20% forest relief so the baseline tension is unchanged; cooling shortened the arc to ~26–28 days. |
+| Tightened generation: break on all-towns-fair, 140 tries, spacing ≥4, prefer open ground | User asked to tighten the guarantee. Fair-map rate ~85% → ~97%. |
+| Re-verified the full economy (cooling + buffer + clearing) on real maps | Terrain changes shift balance; checked naive loses 16/16, skilled wins 16/16. |
 
----
+## Decision log (town-centric iteration)
 
-## Quick Recap for Next Session
+| Decision | Why |
+|---|---|
+| Demand lives at towns; serve only within a town's catchment | User chose "Town = demand & NIMBY" to make the map meaningful. Local serving is what makes *where* you build matter (vs. the global-footprint model). |
+| Local, convex NIMBY normalised by size-based comfort (`11 * (supply/(3.85*size))^2.2`) | Crowding a town angers *that* town, accelerating past comfort. Size-based comfort keeps balance stable across seeds; geometry enters via the hard cap. |
+| Hard serving cap = catchment capacity (geometry) | This is the map-driven difficulty: a boxed-in town can't be fully served. |
+| Considerate town generation (best of ~70 layouts, scored by catchment fairness) | User chose "considerate / fair" — guarantees most seeds give every town a workable catchment instead of rolling the dice. |
+| Replaced global footprint model with per-town | The footprint model (convex penalty on total tiles by type) made coverage matter but not *location*; towns now tie generation ↔ mechanics. |
+| Retuned: growth 5.5%/day, revenue 2.7, goal $6,000 | New model's per-town caps are smaller than the whole map, so the arc was retuned (sim + verified on real maps) to keep naive-loses / skilled-wins, ~30-day arc. |
+| Kept 3 towns (22/16/10) | Matches the Aquidneck realism basis and the validated balance. Count is a one-line change (`MapGenerator.TownSizes`) + a re-tune. |
 
-When you come back to this project:
+### Earlier iteration (global-footprint — superseded by the above for happiness)
 
-1. Read this file first.
-2. The game runs, generates a map from a seed, lets you drag red rectangles, shows Happiness + Money.
-3. The user wants to extend `DataCenter` with more variables and a formula.
-4. The user has consistently preferred concise responses and small focused changes.
-5. The user has a clear "this is realistic / this isn't" sensibility about the map (e.g., forests shouldn't be on rivers, towns shouldn't be in forests).
-6. Build with `dotnet build` from the project folder; run with `dotnet run`.
-7. If something's wrong, check the .exe lock first.
+| Decision | Why |
+|---|---|
+| Convex, uncapped footprint penalty (`130 * x^1.8`) | Old `min(18, log)` cap made sprawl free → "middle of the road" was safe. |
+| Stateful happiness (fall 0.55 / rise 0.16) | Bad days linger, recovery slow; implements the recovery the dead `happinessChange` code only gestured at. (Kept.) |
+| Win = cash goal; lose = revolt or bankruptcy | Gives the treadmill a goal and two failure modes. (Kept.) |
+| Tuned via simulation before coding | Balance is a numbers problem; `tools/balance_sim.py`, verified against a C# port. (Kept.) |
+| Full-state save (`v2`) | A tycoon run needs to survive restart. (Kept.) |
+| No overlapping placement; 50% refund | Removes a supply double-count exploit; expansion is a commitment. (Kept.) |
+| Removed `DataCenter.Value` | Unused vestige. (Kept.) |
