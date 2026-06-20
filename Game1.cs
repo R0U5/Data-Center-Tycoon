@@ -20,20 +20,19 @@ public class Game1 : Game
     private const int WindowWidth = 1920;
     private const int WindowHeight = 1080;
     private const string SaveFileName = "save.dat";
-    private const int GridArea = MapGenerator.GridWidth * MapGenerator.GridHeight;
 
     private const float START_MONEY = 650f;
-    private const float WIN_CASH_GOAL = 7000f;
+    private const float WIN_CASH_GOAL = 6000f;
     private const float COST_PER_TILE = 12f;
     private const float REFUND_FRACTION = 0.5f;
     private const float OP_COST_PER_TILE = 1.0f;
-    private const float REVENUE_PER_SERVED = 2.4f;
-    private const float COMPUTE_PER_TILE = 1.0f;
+    private const float REVENUE_PER_SERVED = 2.7f;
     private const float BASE_DEMAND = 100f;
-    private const float DAILY_DEMAND_GROWTH = 0.07f;
-    private const float FOOTPRINT_WEIGHT = 130f;
-    private const float FOOTPRINT_EXP = 1.8f;
-    private const float BROWNOUT_WEIGHT = 70f;
+    private const float DAILY_DEMAND_GROWTH = 0.055f;
+    private const float NIMBY_WEIGHT = 11f;
+    private const float NIMBY_EXP = 2.2f;
+    private const float COMFORT_PER_SIZE = 3.85f;
+    private const float BROWNOUT_WEIGHT = 50f;
     private const float HAPPINESS_FALL = 0.55f;
     private const float HAPPINESS_RISE = 0.16f;
     private const float HAPPINESS_LOSE = 35f;
@@ -47,9 +46,11 @@ public class Game1 : Game
     private static readonly Color PlacedFillColor = new(220, 70, 70);
     private static readonly Color PlacedOutlineColor = new(255, 130, 130);
     private static readonly Color RiverColor = new(60, 110, 200);
-    private static readonly Color TownColor = new(160, 110, 70);
+    private static readonly Color TownColor = new(150, 105, 65);
+    private static readonly Color TownAngerColor = new(225, 45, 45);
     private static readonly Color ForestColor = new(30, 80, 30);
     private static readonly Color PanelColor = new(0, 0, 0);
+    private static readonly Color[] TownTints = { new(80, 200, 255), new(200, 140, 255), new(255, 205, 90), new(120, 255, 150) };
     private static readonly CultureInfo Usd = CultureInfo.GetCultureInfo("en-US");
 
     private enum GameState { Playing, Won, Lost }
@@ -63,9 +64,9 @@ public class Game1 : Game
 
     private float _money;
     private float _computeDemand;
-    private float _computeSupply;
     private int _tileCount;
-    private float _weightedCovered;
+    private int[] _townSupply = Array.Empty<int>();
+    private int _townSizeDenom = 1;
     private float _happiness;
     private int _day;
     private float _lastRevenue;
@@ -101,8 +102,7 @@ public class Game1 : Game
 
     private void StartNewGame()
     {
-        long seed = Environment.TickCount64;
-        _map = new MapGenerator(seed);
+        _map = new MapGenerator(Environment.TickCount64);
         ResetState();
     }
 
@@ -125,8 +125,17 @@ public class Game1 : Game
         _state = GameState.Playing;
         _endReason = "";
         _dragging = false;
+        InitTownState();
         RecalculateCoverage();
         SaveGame();
+    }
+
+    private void InitTownState()
+    {
+        _townSupply = new int[_map.Towns.Count];
+        _townSizeDenom = 0;
+        foreach (var t in _map.Towns) _townSizeDenom += t.Size;
+        if (_townSizeDenom <= 0) _townSizeDenom = 1;
     }
 
     protected override void Update(GameTime gameTime)
@@ -155,7 +164,6 @@ public class Game1 : Game
     private void HandlePlacement(MouseState mouse)
     {
         var mousePos = new Vector2(mouse.X, mouse.Y);
-
         bool leftPressed = mouse.LeftButton == ButtonState.Pressed && _previousMouse.LeftButton == ButtonState.Released;
         bool leftReleased = mouse.LeftButton == ButtonState.Released && _previousMouse.LeftButton == ButtonState.Pressed;
         bool rightPressed = mouse.RightButton == ButtonState.Pressed && _previousMouse.RightButton == ButtonState.Released;
@@ -198,7 +206,7 @@ public class Game1 : Game
 
     private void AdvanceDay()
     {
-        float served = Math.Min(_computeSupply, _computeDemand);
+        var (demand, served) = DemandServed();
         _lastRevenue = REVENUE_PER_SERVED * served;
         _lastOpCost = OP_COST_PER_TILE * _tileCount;
         _lastNet = _lastRevenue - _lastOpCost;
@@ -212,7 +220,7 @@ public class Game1 : Game
         if (_happiness < HAPPINESS_LOSE)
         {
             _state = GameState.Lost;
-            _endReason = "The community revolted against your sprawl.";
+            _endReason = "The towns revolted against the data centers crowding them.";
         }
         else if (_money < 0f)
         {
@@ -228,21 +236,45 @@ public class Game1 : Game
         SaveGame();
     }
 
+    private float DemandForTown(int id) => _map.Towns[id].Size / (float)_townSizeDenom * _computeDemand;
+
+    private (float demand, float served) DemandServed()
+    {
+        float d = 0f, s = 0f;
+        foreach (var t in _map.Towns)
+        {
+            float dem = DemandForTown(t.Id);
+            d += dem;
+            s += Math.Min(dem, _townSupply[t.Id]);
+        }
+        return (d, s);
+    }
+
+    private float NimbyTotal()
+    {
+        float n = 0f;
+        foreach (var t in _map.Towns)
+        {
+            float comfort = COMFORT_PER_SIZE * t.Size;
+            n += NIMBY_WEIGHT * (float)Math.Pow(_townSupply[t.Id] / comfort, NIMBY_EXP);
+        }
+        return n;
+    }
+
+    private float HappinessTargetNow()
+    {
+        var (d, s) = DemandServed();
+        float brownout = d > 0f ? BROWNOUT_WEIGHT * (1f - s / d) : 0f;
+        return 100f - NimbyTotal() - brownout;
+    }
+
     private void StepHappiness() => _happiness = ProjectedHappiness();
 
     private float ProjectedHappiness()
     {
-        float target = HappinessTarget(_computeSupply, _weightedCovered, _computeDemand);
+        float target = HappinessTargetNow();
         float rate = target < _happiness ? HAPPINESS_FALL : HAPPINESS_RISE;
         return Math.Clamp(_happiness + rate * (target - _happiness), 0f, 100f);
-    }
-
-    private static float HappinessTarget(float supply, float weightedCovered, float demand)
-    {
-        float servedFrac = demand > 0f ? Math.Min(1f, supply / demand) : 1f;
-        float footprint = FOOTPRINT_WEIGHT * (float)Math.Pow(weightedCovered / GridArea, FOOTPRINT_EXP);
-        float brownout = BROWNOUT_WEIGHT * (1f - servedFrac);
-        return 100f - footprint - brownout;
     }
 
     private void RecalculateCoverage()
@@ -261,29 +293,18 @@ public class Game1 : Game
                     covered[x, y] = true;
         }
 
+        Array.Clear(_townSupply, 0, _townSupply.Length);
         int count = 0;
-        float weighted = 0f;
         for (int x = 0; x < MapGenerator.GridWidth; x++)
             for (int y = 0; y < MapGenerator.GridHeight; y++)
             {
                 if (!covered[x, y]) continue;
                 count++;
-                weighted += TileWeight(_map.Tiles[x, y]);
+                int t = _map.CatchmentTown[x, y];
+                if (t >= 0 && t < _townSupply.Length) _townSupply[t]++;
             }
-
         _tileCount = count;
-        _weightedCovered = weighted;
-        _computeSupply = count * COMPUTE_PER_TILE;
     }
-
-    private static float TileWeight(TileType t) => t switch
-    {
-        TileType.Empty => 1f,
-        TileType.Forest => 1.6f,
-        TileType.River => 2.5f,
-        TileType.Town => 4f,
-        _ => 1f
-    };
 
     private static Rectangle TileBox(Vector2 a, Vector2 b)
     {
@@ -318,8 +339,11 @@ public class Game1 : Game
         _spriteBatch.Begin();
 
         DrawMap();
+        DrawCatchments();
+        DrawTowns();
         DrawDataCenters();
         DrawActiveRect();
+        DrawTownGauges();
         DrawHud();
 
         if (_state != GameState.Playing)
@@ -336,21 +360,42 @@ public class Game1 : Game
             for (int y = 0; y < MapGenerator.GridHeight; y++)
             {
                 var tile = _map.Tiles[x, y];
-                if (tile == TileType.Empty) continue;
+                if (tile != TileType.River && tile != TileType.Forest) continue;
                 var rect = new Rectangle(x * ts, y * ts, ts, ts);
-                FillRect(rect, tile switch
-                {
-                    TileType.River => RiverColor,
-                    TileType.Town => TownColor,
-                    TileType.Forest => ForestColor,
-                    _ => Color.Transparent
-                });
+                FillRect(rect, tile == TileType.River ? RiverColor : ForestColor);
             }
+    }
+
+    private void DrawCatchments()
+    {
+        int ts = MapGenerator.TileSize;
+        for (int x = 0; x < MapGenerator.GridWidth; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+            {
+                int t = _map.CatchmentTown[x, y];
+                if (t < 0 || _map.Tiles[x, y] != TileType.Empty) continue;
+                FillRect(new Rectangle(x * ts, y * ts, ts, ts), TownTints[t % TownTints.Length] * 0.13f);
+            }
+    }
+
+    private void DrawTowns()
+    {
+        int ts = MapGenerator.TileSize;
+        foreach (var t in _map.Towns)
+        {
+            float comfort = COMFORT_PER_SIZE * t.Size;
+            float ratio = comfort > 0f ? _townSupply[t.Id] / comfort : 0f;
+            float anger = Math.Clamp((ratio - 0.55f) / 0.6f, 0f, 1f);
+            var color = Color.Lerp(TownColor, TownAngerColor, anger);
+            foreach (var (x, y) in t.Tiles)
+                FillRect(new Rectangle(x * ts, y * ts, ts, ts), color);
+        }
     }
 
     private void DrawDataCenters()
     {
         int ts = MapGenerator.TileSize;
+        var covered = new bool[MapGenerator.GridWidth, MapGenerator.GridHeight];
         foreach (var dc in _dataCenters)
         {
             int startX = Math.Max(0, dc.Bounds.X / ts);
@@ -359,24 +404,26 @@ public class Game1 : Game
             int endY = Math.Min(MapGenerator.GridHeight, (dc.Bounds.Y + dc.Bounds.Height + ts - 1) / ts);
             for (int x = startX; x < endX; x++)
                 for (int y = startY; y < endY; y++)
-                {
-                    var rect = new Rectangle(x * ts, y * ts, ts, ts);
-                    FillRect(rect, PlacedFillColor);
-                    OutlineRect(rect, PlacedOutlineColor);
-                }
+                    covered[x, y] = true;
         }
+        for (int x = 0; x < MapGenerator.GridWidth; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+            {
+                if (!covered[x, y]) continue;
+                var rect = new Rectangle(x * ts, y * ts, ts, ts);
+                FillRect(rect, PlacedFillColor);
+                OutlineRect(rect, PlacedOutlineColor);
+            }
     }
 
     private void DrawActiveRect()
     {
         if (!_dragging || _state != GameState.Playing) return;
-
         var mouse = Mouse.GetState();
         var box = TileBox(_dragStart, new Vector2(mouse.X, mouse.Y));
         bool clear = IsRegionClear(box);
         float cost = CostOf(box);
         bool valid = clear && _money >= cost;
-
         Color fill = valid ? ActiveFillColor : InvalidFillColor;
         Color outline = valid ? ActiveOutlineColor : InvalidOutlineColor;
 
@@ -390,30 +437,49 @@ public class Game1 : Game
             }
 
         string label = clear ? $"Build: {cost.ToString("C0", Usd)}" : "Occupied";
-        var pos = new Vector2(box.X, box.Y - 24);
-        _spriteBatch.DrawString(_font, label, pos, valid ? Color.White : InvalidOutlineColor);
+        _spriteBatch.DrawString(_font, label, new Vector2(box.X, box.Y - 24), valid ? Color.White : InvalidOutlineColor);
+    }
+
+    private void DrawTownGauges()
+    {
+        int ts = MapGenerator.TileSize;
+        foreach (var t in _map.Towns)
+        {
+            float dem = DemandForTown(t.Id);
+            float sup = _townSupply[t.Id];
+            float served = Math.Min(dem, sup);
+            float frac = dem > 0f ? served / dem : 1f;
+            Color barColor = frac >= 0.99f ? Color.LightGreen : (frac >= 0.6f ? Color.Gold : Color.OrangeRed);
+
+            int cx = (int)(t.CenterX * ts) + ts / 2;
+            int cy = (int)(t.CenterY * ts) + ts / 2;
+            var bar = new Rectangle(cx - 45, cy - 50, 90, 12);
+            DrawBar(bar, frac, barColor, new Color(30, 30, 30));
+            string label = $"{served:F0}/{dem:F0}";
+            var size = _font.MeasureString(label) * 0.6f;
+            _spriteBatch.DrawString(_font, label, new Vector2(cx - size.X / 2f, cy - 72), Color.White,
+                0f, Vector2.Zero, 0.6f, SpriteEffects.None, 0f);
+        }
     }
 
     private void DrawHud()
     {
-        const int px = 10, py = 10, pw = 560, ph = 250;
-        DrawPanel(new Rectangle(px, py, pw, ph), 0.55f);
+        const int px = 10, py = 10, pw = 560, ph = 218;
+        DrawPanel(new Rectangle(px, py, pw, ph), 0.58f);
         int x = px + 14;
         int y = py + 12;
 
-        float goalFrac = Math.Clamp(_money / WIN_CASH_GOAL, 0f, 1f);
         _spriteBatch.DrawString(_font, $"Day {_day}", new Vector2(x, y), Color.White);
         _spriteBatch.DrawString(_font, $"Goal: {WIN_CASH_GOAL.ToString("C0", Usd)}", new Vector2(px + pw - 170, y), Color.Gold);
         y += 28;
 
         _spriteBatch.DrawString(_font, $"Money: {_money.ToString("C0", Usd)}", new Vector2(x, y), Color.White);
-        DrawBar(new Rectangle(x + 200, y + 4, 320, 14), goalFrac, Color.Gold, new Color(60, 60, 60));
+        DrawBar(new Rectangle(x + 200, y + 4, 320, 14), _money / WIN_CASH_GOAL, Color.Gold, new Color(60, 60, 60));
         y += 30;
 
         float proj = ProjectedHappiness();
         Color hColor = HappinessColor(_happiness);
-        string hText = $"Happiness: {_happiness:F0}";
-        _spriteBatch.DrawString(_font, hText, new Vector2(x, y), hColor);
+        _spriteBatch.DrawString(_font, $"Happiness: {_happiness:F0}", new Vector2(x, y), hColor);
         if (_dragging)
             _spriteBatch.DrawString(_font, $"-> {proj:F0}", new Vector2(x + 170, y), HappinessColor(proj));
         var hbar = new Rectangle(x + 280, y + 4, 240, 14);
@@ -422,12 +488,13 @@ public class Game1 : Game
         FillRect(new Rectangle(markX, hbar.Y - 2, 2, hbar.Height + 4), Color.OrangeRed);
         y += 30;
 
-        float servedPct = _computeDemand > 0f ? Math.Min(1f, _computeSupply / _computeDemand) * 100f : 100f;
+        var (demand, served) = DemandServed();
+        float servedPct = demand > 0f ? served / demand * 100f : 100f;
         Color servedColor = servedPct >= 99.5f ? Color.LightGreen : (servedPct >= 70f ? Color.White : Color.Orange);
-        _spriteBatch.DrawString(_font, $"Demand: {_computeDemand:F0}    Supply: {_computeSupply:F0}", new Vector2(x, y), Color.White);
+        _spriteBatch.DrawString(_font, $"Demand: {demand:F0}    Served: {served:F0} ({servedPct:F0}%)", new Vector2(x, y), servedColor);
         y += 26;
-        _spriteBatch.DrawString(_font, $"Served: {servedPct:F0}%    (next demand: {_computeDemand * (1f + DAILY_DEMAND_GROWTH):F0})", new Vector2(x, y), servedColor);
-        y += 30;
+        _spriteBatch.DrawString(_font, $"Tiles: {_tileCount}    Next demand: {demand * (1f + DAILY_DEMAND_GROWTH):F0}", new Vector2(x, y), Color.LightGray);
+        y += 28;
 
         if (_day > 1)
         {
@@ -438,23 +505,20 @@ public class Game1 : Game
         }
         else
         {
-            _spriteBatch.DrawString(_font, "Drag to build data centers, then advance the day.", new Vector2(x, y), Color.LightGray);
+            _spriteBatch.DrawString(_font, "Build near towns to serve their demand - but don't crowd them.", new Vector2(x, y), Color.LightGray);
         }
-        y += 30;
+        y += 28;
 
-        _spriteBatch.DrawString(_font, "SPACE Next Day    Right-click Remove    R Retry    N New Map", new Vector2(x, y), Color.Gold);
+        _spriteBatch.DrawString(_font, "SPACE Next Day   Right-click Remove   R Retry   N New Map", new Vector2(x, y), Color.Gold);
 
         if (_happiness < HAPPINESS_WARN && _state == GameState.Playing)
-        {
-            string warn = "WARNING: happiness critical - the community is turning against you.";
-            _spriteBatch.DrawString(_font, warn, new Vector2(px, WindowHeight - 34), Color.OrangeRed);
-        }
+            _spriteBatch.DrawString(_font, "WARNING: happiness critical - the towns are turning against you.",
+                new Vector2(px, WindowHeight - 34), Color.OrangeRed);
     }
 
     private void DrawEndScreen()
     {
         FillRect(new Rectangle(0, 0, WindowWidth, WindowHeight), PanelColor * 0.65f);
-
         string title = _state == GameState.Won ? "YOU WIN" : "GAME OVER";
         Color titleColor = _state == GameState.Won ? Color.Gold : Color.OrangeRed;
         float scale = 3.2f;
@@ -476,8 +540,7 @@ public class Game1 : Game
     private static Color HappinessColor(float h)
         => h < HAPPINESS_LOSE + 5f ? Color.Red : (h < HAPPINESS_WARN ? Color.Orange : (h < 70f ? Color.Yellow : Color.LightGreen));
 
-    private void DrawPanel(Rectangle rect, float alpha)
-        => FillRect(rect, PanelColor * alpha);
+    private void DrawPanel(Rectangle rect, float alpha) => FillRect(rect, PanelColor * alpha);
 
     private void DrawBar(Rectangle rect, float frac, Color fill, Color bg)
     {
@@ -570,6 +633,7 @@ public class Game1 : Game
             }
 
             _map = new MapGenerator(seed);
+            InitTownState();
             _dataCenters.Clear();
             _dataCenters.AddRange(dcs);
             _money = money;

@@ -1,116 +1,115 @@
 #!/usr/bin/env python3
 """
-Balance simulation for Data Center Tycoon.
+Balance simulation for Data Center Tycoon (per-town catchment model).
 
-This mirrors the economic / happiness model implemented in Game1.cs so the
-core balance can be re-tuned without launching the game. Keep the constants
-in CONFIG below in sync with the constants at the top of Game1.cs.
+Mirrors the economy in Game1.cs so balance can be re-tuned without launching the
+game. Keep the constants below in sync with the constants at the top of Game1.cs.
 
-The point of the model: the player must serve a compute demand that grows
-every day, by covering the map with data centers. Covering land costs money
-(build + daily operating cost) and, increasingly, happiness (an *uncapped,
-convex* footprint penalty). Failing to meet demand costs happiness too
-(brownout). There is no safe "middle of the road": once demand outgrows the
-cheap (empty) land, you can no longer both meet demand and stay liked, so
-"just meet all demand" becomes a losing move. Skilled play caps the footprint,
-accepts partial service, and banks the cash goal before the community revolts.
+The model: demand lives at the towns. Each town t emits demand proportional to
+its size (growing over time) and can only be served by data centers within its
+service catchment. Packing compute around a town angers it - a convex NIMBY
+penalty normalised by a size-based "comfortable capacity" (COMFORT_PER_SIZE *
+size). A town's hard serving cap is how many tiles physically fit in its
+catchment (geometry; varies by map - here approximated by CAPACITY per town).
+
+There is no safe "serve everyone": demand grows ~5.5%/day forever, so to keep
+every town fully served you must pack them past comfort and they revolt. Skilled
+play serves each town up to ~its comfortable capacity, accepts the growing
+brownout, and banks the cash goal before happiness erodes.
 
 Run:  python3 tools/balance_sim.py
-A healthy balance prints: meet_demand -> REVOLT, an adaptive strategy -> WIN,
-and both too-lean and too-aggressive -> REVOLT/BANKRUPT.
+Healthy balance prints: meet_demand -> REVOLT, comfort 0.9/1.0 -> WIN,
+comfort 1.1 (over-pack) -> mostly REVOLT.
 """
 import math
 
-CONFIG = dict(
-    START_MONEY=650.0,
-    WIN_CASH_GOAL=7000.0,
-    COST_PER_TILE=12.0,
-    REFUND_FRACTION=0.5,
-    OP_COST_PER_TILE=1.0,
-    REVENUE_PER_SERVED=2.4,
-    COMPUTE_PER_TILE=1.0,
-    BASE_DEMAND=100.0,
-    DAILY_DEMAND_GROWTH=0.07,
-    FOOTPRINT_WEIGHT=130.0,
-    FOOTPRINT_EXP=1.8,
-    BROWNOUT_WEIGHT=70.0,
-    HAPPINESS_FALL=0.55,
-    HAPPINESS_RISE=0.16,
-    HAPPINESS_LOSE=35.0,
-    GRID_AREA=48 * 27,
-    # Empty buildable tiles before you spill onto town/river/forest. In-game this
-    # is the actual count of empty tiles on the map and varies by seed; the spill
-    # weight is the average TileWeight of non-empty land.
-    USABLE=690,
-    SPILL_WEIGHT=2.5,
-)
+# ---- constants (mirror Game1.cs) ----
+START_MONEY = 650.0
+WIN_CASH_GOAL = 6000.0
+COST_PER_TILE = 12.0
+REFUND_FRACTION = 0.5
+OP_COST_PER_TILE = 1.0
+REVENUE_PER_SERVED = 2.7
+BASE_DEMAND = 100.0
+DAILY_DEMAND_GROWTH = 0.055
+NIMBY_WEIGHT = 11.0
+NIMBY_EXP = 2.2
+COMFORT_PER_SIZE = 3.85
+BROWNOUT_WEIGHT = 50.0
+HAPPINESS_FALL = 0.55
+HAPPINESS_RISE = 0.16
+HAPPINESS_LOSE = 35.0
+
+# Representative town layout. SIZE drives demand share + comfortable capacity;
+# CAPACITY is the catchment hard cap (set by terrain/geometry in-game; these are
+# the measured averages for ServiceRadius=6 on a fair map: ~126/100/81).
+TOWNS = [
+    dict(size=22, capacity=126),
+    dict(size=16, capacity=100),
+    dict(size=10, capacity=81),
+]
+DENOM = sum(t["size"] for t in TOWNS)
 
 
-def weighted_covered(tiles, c):
-    if tiles <= c["USABLE"]:
-        return float(tiles)
-    return c["USABLE"] + (tiles - c["USABLE"]) * c["SPILL_WEIGHT"]
-
-
-def happiness_target(supply, weighted, demand, c):
-    served = min(1.0, supply / demand) if demand > 0 else 1.0
-    footprint = c["FOOTPRINT_WEIGHT"] * (weighted / c["GRID_AREA"]) ** c["FOOTPRINT_EXP"]
-    brownout = c["BROWNOUT_WEIGHT"] * (1.0 - served)
-    return 100.0 - footprint - brownout
-
-
-def simulate(strategy, c, max_days=200):
-    money = c["START_MONEY"]
-    demand = c["BASE_DEMAND"]
+def simulate(strategy, days=200):
+    money = START_MONEY
+    demand = BASE_DEMAND
     happiness = 100.0
-    tiles = 0
+    supply = [0] * len(TOWNS)
     day = 1
-    while day < max_days:
-        target = max(0, strategy(day, demand, tiles, c))
-        if target > tiles:
-            affordable = int(money // c["COST_PER_TILE"])
-            new_tiles = min(target, tiles + affordable)
-            money -= (new_tiles - tiles) * c["COST_PER_TILE"]
-            tiles = new_tiles
-        elif target < tiles:
-            money += (tiles - target) * c["COST_PER_TILE"] * c["REFUND_FRACTION"]
-            tiles = target
+    while day < days:
+        dem = [t["size"] / DENOM * demand for t in TOWNS]
+        desired = [max(0, min(strategy(dem[i], TOWNS[i]), TOWNS[i]["capacity"]))
+                   for i in range(len(TOWNS))]
+        # removals refund, then cash-limited builds (greedy by need)
+        for i in range(len(TOWNS)):
+            if desired[i] < supply[i]:
+                money += (supply[i] - desired[i]) * COST_PER_TILE * REFUND_FRACTION
+                supply[i] = desired[i]
+        budget = int(money // COST_PER_TILE)
+        for i in sorted(range(len(TOWNS)), key=lambda i: desired[i] - supply[i], reverse=True):
+            take = min(max(0, desired[i] - supply[i]), budget)
+            money -= take * COST_PER_TILE
+            supply[i] += take
+            budget -= take
 
-        supply = tiles * c["COMPUTE_PER_TILE"]
-        served = min(supply, demand)
-        money += c["REVENUE_PER_SERVED"] * served - c["OP_COST_PER_TILE"] * tiles
+        served = sum(min(dem[i], supply[i]) for i in range(len(TOWNS)))
+        total_demand = sum(dem)
+        tiles = sum(supply)
+        money += REVENUE_PER_SERVED * served - OP_COST_PER_TILE * tiles
 
-        tgt = happiness_target(supply, weighted_covered(tiles, c), demand, c)
-        rate = c["HAPPINESS_FALL"] if tgt < happiness else c["HAPPINESS_RISE"]
-        happiness = max(0.0, min(100.0, happiness + rate * (tgt - happiness)))
+        nimby = sum(NIMBY_WEIGHT * (supply[i] / (COMFORT_PER_SIZE * TOWNS[i]["size"])) ** NIMBY_EXP
+                    for i in range(len(TOWNS)))
+        brownout = BROWNOUT_WEIGHT * (1 - served / total_demand) if total_demand > 0 else 0.0
+        target = 100 - nimby - brownout
+        rate = HAPPINESS_FALL if target < happiness else HAPPINESS_RISE
+        happiness = max(0.0, min(100.0, happiness + rate * (target - happiness)))
 
-        demand *= 1.0 + c["DAILY_DEMAND_GROWTH"]
+        demand *= 1 + DAILY_DEMAND_GROWTH
         day += 1
-        if happiness < c["HAPPINESS_LOSE"]:
-            return ("REVOLT", day, happiness, money, tiles)
+        if happiness < HAPPINESS_LOSE:
+            return ("REVOLT", day, happiness, money)
         if money < 0:
-            return ("BANKRUPT", day, happiness, money, tiles)
-        if money >= c["WIN_CASH_GOAL"]:
-            return ("WIN", day, happiness, money, tiles)
-    return ("TIMEOUT", day, happiness, money, tiles)
+            return ("BANKRUPT", day, happiness, money)
+        if money >= WIN_CASH_GOAL:
+            return ("WIN", day, happiness, money)
+    return ("TIMEOUT", day, happiness, money)
 
 
 STRATEGIES = {
-    "meet_demand (naive)": lambda day, d, t, c: math.ceil(d),
-    "cap_usable (skilled)": lambda day, d, t, c: min(math.ceil(d), c["USABLE"]),
-    "lean 0.5": lambda day, d, t, c: math.ceil(d * 0.5),
-    "lean 0.8": lambda day, d, t, c: math.ceil(d * 0.8),
-    "aggressive 1.25": lambda day, d, t, c: math.ceil(d * 1.25),
+    "meet_demand (naive)": lambda dem, t: math.ceil(dem),
+    "comfort 0.9 (skilled)": lambda dem, t: min(dem, 0.9 * COMFORT_PER_SIZE * t["size"]),
+    "comfort 1.0 (skilled)": lambda dem, t: min(dem, 1.0 * COMFORT_PER_SIZE * t["size"]),
+    "comfort 1.1 (over-pack)": lambda dem, t: min(dem, 1.1 * COMFORT_PER_SIZE * t["size"]),
 }
 
 
 def main():
-    print("Data Center Tycoon - balance check (constants mirror Game1.cs)\n")
+    print("Data Center Tycoon - per-town balance check (constants mirror Game1.cs)\n")
     for name, strat in STRATEGIES.items():
-        outcome, day, h, money, tiles = simulate(strat, CONFIG)
-        print(f"  {name:22s} -> {outcome:8s} day {day:3d}  happiness {h:5.1f}  "
-              f"cash ${money:7.0f}  tiles {tiles:4d}")
-    print("\nHealthy balance: 'meet_demand' loses, 'cap_usable' wins, lean/aggressive lose.")
+        outcome, day, h, money = simulate(strat)
+        print(f"  {name:24s} -> {outcome:8s} day {day:3d}  happiness {h:5.1f}  cash ${money:7.0f}")
+    print("\nHealthy: meet_demand REVOLTS, comfort 0.9/1.0 WIN, comfort 1.1 over-packs into a REVOLT.")
 
 
 if __name__ == "__main__":
