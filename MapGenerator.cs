@@ -11,22 +11,49 @@ public enum TileType
     Forest
 }
 
+public class Town
+{
+    public int Id { get; }
+    public List<(int x, int y)> Tiles { get; } = new();
+    public int Size => Tiles.Count;
+    public float CenterX { get; private set; }
+    public float CenterY { get; private set; }
+    public int CatchmentCapacity { get; set; }
+
+    public Town(int id) { Id = id; }
+
+    public void Recenter()
+    {
+        if (Tiles.Count == 0) return;
+        float sx = 0, sy = 0;
+        foreach (var (x, y) in Tiles) { sx += x; sy += y; }
+        CenterX = sx / Tiles.Count;
+        CenterY = sy / Tiles.Count;
+    }
+}
+
 public class MapGenerator
 {
     public const int TileSize = 40;
     public const int GridWidth = 48;
     public const int GridHeight = 27;
+    public const int ServiceRadius = 6;
 
     public TileType[,] Tiles { get; }
     public long Seed { get; }
+    public List<Town> Towns { get; } = new();
+    public int[,] CatchmentTown { get; }
 
     private readonly float[,] _elevation;
     private readonly float[,] _moisture;
+
+    private static readonly int[] TownSizes = { 22, 16, 10 };
 
     public MapGenerator(long seed)
     {
         Seed = seed;
         Tiles = new TileType[GridWidth, GridHeight];
+        CatchmentTown = new int[GridWidth, GridHeight];
         _elevation = new float[GridWidth, GridHeight];
         _moisture = new float[GridWidth, GridHeight];
 
@@ -46,7 +73,8 @@ public class MapGenerator
 
         IdentifyRiver();
         PlaceForests();
-        PlaceTowns();
+        PlaceTownsConsiderate();
+        ComputeCatchments();
     }
 
     private void IdentifyRiver()
@@ -199,7 +227,7 @@ public class MapGenerator
         }
     }
 
-    private void PlaceTowns()
+    private void PlaceTownsConsiderate()
     {
         var rivers = new List<(int x, int y)>();
         for (int x = 0; x < GridWidth; x++)
@@ -207,22 +235,60 @@ public class MapGenerator
                 if (Tiles[x, y] == TileType.River)
                     rivers.Add((x, y));
 
-        if (rivers.Count == 0) return;
+        List<(int x, int y)> bestCells = null;
+        int bestScore = int.MinValue;
 
-        var rng = new Random((int)(Seed + 31337));
+        for (int attempt = 0; attempt < 70; attempt++)
+        {
+            ClearTownTiles();
+            var rng = new Random(unchecked((int)Seed + 31337 + attempt * 1009));
+            var placed = TryPlaceAllTowns(rng, rivers);
+
+            if (placed.Count < TownSizes.Length) continue;
+
+            int score = ScoreTownLayout(placed);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestCells = CollectTownCells(placed);
+            }
+            if (score >= FairScoreThreshold())
+                break;
+        }
+
+        ClearTownTiles();
+        if (bestCells != null)
+            foreach (var (x, y) in bestCells)
+                Tiles[x, y] = TileType.Town;
+
+        BuildTownsFromTiles();
+    }
+
+    private int FairScoreThreshold()
+    {
+        int sum = 0;
+        foreach (int s in TownSizes) sum += TargetCapacity(s);
+        return (int)(sum * 0.85f);
+    }
+
+    private static int TargetCapacity(int size) => (int)(6.67f * size);
+    private static int MinCapacity(int size) => (int)(3.0f * size);
+
+    private List<List<(int x, int y)>> TryPlaceAllTowns(Random rng, List<(int x, int y)> rivers)
+    {
+        var result = new List<List<(int x, int y)>>();
         var buffers = new (TileType, int)[] { (TileType.Forest, 2) };
 
-        var townSizes = new[] { 22, 16, 10 };
-
-        foreach (int targetSize in townSizes)
+        foreach (int targetSize in TownSizes)
         {
+            List<(int x, int y)> townCells = null;
             for (int attempt = 0; attempt < 200; attempt++)
             {
                 int x, y;
-                if (attempt < 100)
+                if (rivers.Count > 0 && attempt < 120)
                 {
                     var anchor = rivers[rng.Next(rivers.Count)];
-                    int dist = 1 + rng.Next(3);
+                    int dist = 2 + rng.Next(4);
                     int side = rng.Next(4);
                     switch (side)
                     {
@@ -240,18 +306,154 @@ public class MapGenerator
 
                 if (x < 0 || x >= GridWidth || y < 0 || y >= GridHeight) continue;
                 if (Tiles[x, y] != TileType.Empty) continue;
-                if (IsNearType(x, y, TileType.Forest, 2)) continue;
+                if (IsNearType(x, y, TileType.Town, 3)) continue;
+                if (attempt < 160 && IsNearType(x, y, TileType.Forest, 2)) continue;
 
-                GrowCluster(rng, x, y, targetSize, TileType.Town, new[] { TileType.River, TileType.Forest, TileType.Town }, buffers);
-                break;
+                townCells = GrowCluster(rng, x, y, targetSize, TileType.Town,
+                    new[] { TileType.River, TileType.Forest, TileType.Town }, buffers);
+                if (townCells.Count >= targetSize * 0.6f) break;
+                foreach (var (cx, cy) in townCells) Tiles[cx, cy] = TileType.Empty;
+                townCells = null;
             }
+
+            if (townCells == null) break;
+            result.Add(townCells);
         }
+
+        return result;
     }
 
-    private void GrowCluster(Random rng, int startX, int startY, int targetSize, TileType type, TileType[] avoid, (TileType type, int distance)[] buffers = null)
+    private int ScoreTownLayout(List<List<(int x, int y)>> townCellLists)
+    {
+        var nearest = ComputeNearestTown(townCellLists);
+        var capacity = new int[townCellLists.Count];
+        for (int x = 0; x < GridWidth; x++)
+            for (int y = 0; y < GridHeight; y++)
+            {
+                int t = nearest[x, y];
+                if (t >= 0 && Tiles[x, y] == TileType.Empty)
+                    capacity[t]++;
+            }
+
+        int score = 0;
+        for (int i = 0; i < townCellLists.Count; i++)
+        {
+            int size = townCellLists[i].Count;
+            score += Math.Min(capacity[i], TargetCapacity(size));
+            if (capacity[i] < MinCapacity(size))
+                score -= (MinCapacity(size) - capacity[i]) * 4;
+        }
+        return score;
+    }
+
+    private int[,] ComputeNearestTown(List<List<(int x, int y)>> townCellLists)
+    {
+        var nearest = new int[GridWidth, GridHeight];
+        var dist = new int[GridWidth, GridHeight];
+        for (int x = 0; x < GridWidth; x++)
+            for (int y = 0; y < GridHeight; y++) { nearest[x, y] = -1; dist[x, y] = int.MaxValue; }
+
+        var queue = new Queue<(int x, int y)>();
+        for (int t = 0; t < townCellLists.Count; t++)
+            foreach (var (x, y) in townCellLists[t])
+            {
+                if (nearest[x, y] != -1) continue;
+                nearest[x, y] = t;
+                dist[x, y] = 0;
+                queue.Enqueue((x, y));
+            }
+
+        while (queue.Count > 0)
+        {
+            var (cx, cy) = queue.Dequeue();
+            if (dist[cx, cy] >= ServiceRadius) continue;
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = cx + dx, ny = cy + dy;
+                    if (nx < 0 || nx >= GridWidth || ny < 0 || ny >= GridHeight) continue;
+                    if (nearest[nx, ny] != -1) continue;
+                    nearest[nx, ny] = nearest[cx, cy];
+                    dist[nx, ny] = dist[cx, cy] + 1;
+                    queue.Enqueue((nx, ny));
+                }
+        }
+
+        return nearest;
+    }
+
+    private void ComputeCatchments()
+    {
+        var townCellLists = new List<List<(int x, int y)>>();
+        foreach (var t in Towns) townCellLists.Add(t.Tiles);
+
+        var nearest = ComputeNearestTown(townCellLists);
+        for (int x = 0; x < GridWidth; x++)
+            for (int y = 0; y < GridHeight; y++)
+                CatchmentTown[x, y] = nearest[x, y];
+
+        foreach (var t in Towns) t.CatchmentCapacity = 0;
+        for (int x = 0; x < GridWidth; x++)
+            for (int y = 0; y < GridHeight; y++)
+            {
+                int t = CatchmentTown[x, y];
+                if (t >= 0 && Tiles[x, y] == TileType.Empty)
+                    Towns[t].CatchmentCapacity++;
+            }
+    }
+
+    private List<(int x, int y)> CollectTownCells(List<List<(int x, int y)>> townCellLists)
+    {
+        var all = new List<(int x, int y)>();
+        foreach (var list in townCellLists)
+            all.AddRange(list);
+        return all;
+    }
+
+    private void ClearTownTiles()
+    {
+        for (int x = 0; x < GridWidth; x++)
+            for (int y = 0; y < GridHeight; y++)
+                if (Tiles[x, y] == TileType.Town)
+                    Tiles[x, y] = TileType.Empty;
+    }
+
+    private void BuildTownsFromTiles()
+    {
+        Towns.Clear();
+        var visited = new bool[GridWidth, GridHeight];
+        for (int x = 0; x < GridWidth; x++)
+            for (int y = 0; y < GridHeight; y++)
+            {
+                if (Tiles[x, y] != TileType.Town || visited[x, y]) continue;
+                var town = new Town(Towns.Count);
+                var queue = new Queue<(int x, int y)>();
+                queue.Enqueue((x, y));
+                visited[x, y] = true;
+                while (queue.Count > 0)
+                {
+                    var (cx, cy) = queue.Dequeue();
+                    town.Tiles.Add((cx, cy));
+                    foreach (var (dx, dy) in new (int, int)[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                    {
+                        int nx = cx + dx, ny = cy + dy;
+                        if (nx < 0 || nx >= GridWidth || ny < 0 || ny >= GridHeight) continue;
+                        if (visited[nx, ny] || Tiles[nx, ny] != TileType.Town) continue;
+                        visited[nx, ny] = true;
+                        queue.Enqueue((nx, ny));
+                    }
+                }
+                town.Recenter();
+                Towns.Add(town);
+            }
+    }
+
+    private List<(int x, int y)> GrowCluster(Random rng, int startX, int startY, int targetSize, TileType type, TileType[] avoid, (TileType type, int distance)[] buffers = null)
     {
         Tiles[startX, startY] = type;
-        var placed = new HashSet<(int, int)> { (startX, startY) };
+        var placed = new List<(int x, int y)> { (startX, startY) };
+        var placedSet = new HashSet<(int, int)> { (startX, startY) };
         var frontier = new List<(int, int)> { (startX, startY) };
         int count = 1;
 
@@ -275,14 +477,17 @@ public class MapGenerator
                 int ny = cy + dy;
                 if (nx < 0 || nx >= GridWidth || ny < 0 || ny >= GridHeight) continue;
                 if (IsForbidden(nx, ny, avoid, buffers)) continue;
-                if (placed.Contains((nx, ny))) continue;
+                if (placedSet.Contains((nx, ny))) continue;
 
                 Tiles[nx, ny] = type;
                 placed.Add((nx, ny));
+                placedSet.Add((nx, ny));
                 frontier.Add((nx, ny));
                 count++;
             }
         }
+
+        return placed;
     }
 
     private bool IsForbidden(int x, int y, TileType[] avoid, (TileType type, int distance)[] buffers)
