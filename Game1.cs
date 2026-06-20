@@ -26,13 +26,17 @@ public class Game1 : Game
     private const float COST_PER_TILE = 12f;
     private const float REFUND_FRACTION = 0.5f;
     private const float OP_COST_PER_TILE = 1.0f;
+    private const float COOLED_OP_FACTOR = 0.5f;
     private const float REVENUE_PER_SERVED = 2.7f;
+    private const float FOREST_BUILD_MULT = 2.5f;
     private const float BASE_DEMAND = 100f;
     private const float DAILY_DEMAND_GROWTH = 0.055f;
-    private const float NIMBY_WEIGHT = 11f;
+    private const float NIMBY_WEIGHT = 14f;
     private const float NIMBY_EXP = 2.2f;
     private const float COMFORT_PER_SIZE = 3.85f;
     private const float BROWNOUT_WEIGHT = 50f;
+    private const float BUFFER_RELIEF = 0.20f;
+    private const float BUFFER_PER_SIZE = 1.0f;
     private const float HAPPINESS_FALL = 0.55f;
     private const float HAPPINESS_RISE = 0.16f;
     private const float HAPPINESS_LOSE = 35f;
@@ -49,6 +53,7 @@ public class Game1 : Game
     private static readonly Color TownColor = new(150, 105, 65);
     private static readonly Color TownAngerColor = new(225, 45, 45);
     private static readonly Color ForestColor = new(30, 80, 30);
+    private static readonly Color CoolingColor = new(150, 220, 255);
     private static readonly Color PanelColor = new(0, 0, 0);
     private static readonly Color[] TownTints = { new(80, 200, 255), new(200, 140, 255), new(255, 205, 90), new(120, 255, 150) };
     private static readonly CultureInfo Usd = CultureInfo.GetCultureInfo("en-US");
@@ -65,7 +70,9 @@ public class Game1 : Game
     private float _money;
     private float _computeDemand;
     private int _tileCount;
+    private int _cooledTiles;
     private int[] _townSupply = Array.Empty<int>();
+    private int[] _townCoveredForest = Array.Empty<int>();
     private int _townSizeDenom = 1;
     private float _happiness;
     private int _day;
@@ -133,6 +140,7 @@ public class Game1 : Game
     private void InitTownState()
     {
         _townSupply = new int[_map.Towns.Count];
+        _townCoveredForest = new int[_map.Towns.Count];
         _townSizeDenom = 0;
         foreach (var t in _map.Towns) _townSizeDenom += t.Size;
         if (_townSizeDenom <= 0) _townSizeDenom = 1;
@@ -178,7 +186,7 @@ public class Game1 : Game
         {
             _dragging = false;
             var box = TileBox(_dragStart, mousePos);
-            if (IsRegionClear(box))
+            if (IsRegionBuildable(box))
             {
                 float cost = CostOf(box);
                 if (_money >= cost)
@@ -208,7 +216,7 @@ public class Game1 : Game
     {
         var (demand, served) = DemandServed();
         _lastRevenue = REVENUE_PER_SERVED * served;
-        _lastOpCost = OP_COST_PER_TILE * _tileCount;
+        _lastOpCost = OperatingCost();
         _lastNet = _lastRevenue - _lastOpCost;
         _money += _lastNet;
 
@@ -250,15 +258,29 @@ public class Game1 : Game
         return (d, s);
     }
 
+    private float OperatingCost()
+        => OP_COST_PER_TILE * (_tileCount - _cooledTiles * (1f - COOLED_OP_FACTOR));
+
     private float NimbyTotal()
     {
         float n = 0f;
         foreach (var t in _map.Towns)
-        {
-            float comfort = COMFORT_PER_SIZE * t.Size;
-            n += NIMBY_WEIGHT * (float)Math.Pow(_townSupply[t.Id] / comfort, NIMBY_EXP);
-        }
+            n += TownNimby(t);
         return n;
+    }
+
+    private float TownNimby(Town t)
+    {
+        float comfort = COMFORT_PER_SIZE * t.Size;
+        float crowding = NIMBY_WEIGHT * (float)Math.Pow(_townSupply[t.Id] / comfort, NIMBY_EXP);
+        return crowding * (1f - ForestRelief(t));
+    }
+
+    private float ForestRelief(Town t)
+    {
+        float preserved = t.ForestInCatchment - _townCoveredForest[t.Id];
+        if (preserved <= 0f) return 0f;
+        return BUFFER_RELIEF * Math.Min(1f, preserved / (BUFFER_PER_SIZE * t.Size));
     }
 
     private float HappinessTargetNow()
@@ -294,16 +316,23 @@ public class Game1 : Game
         }
 
         Array.Clear(_townSupply, 0, _townSupply.Length);
-        int count = 0;
+        Array.Clear(_townCoveredForest, 0, _townCoveredForest.Length);
+        int count = 0, cooled = 0;
         for (int x = 0; x < MapGenerator.GridWidth; x++)
             for (int y = 0; y < MapGenerator.GridHeight; y++)
             {
                 if (!covered[x, y]) continue;
                 count++;
+                if (_map.Cooled[x, y]) cooled++;
                 int t = _map.CatchmentTown[x, y];
-                if (t >= 0 && t < _townSupply.Length) _townSupply[t]++;
+                if (t >= 0 && t < _townSupply.Length)
+                {
+                    _townSupply[t]++;
+                    if (_map.Tiles[x, y] == TileType.Forest) _townCoveredForest[t]++;
+                }
             }
         _tileCount = count;
+        _cooledTiles = cooled;
     }
 
     private static Rectangle TileBox(Vector2 a, Vector2 b)
@@ -318,19 +347,34 @@ public class Game1 : Game
         return new Rectangle(x0 * ts, y0 * ts, (x1 - x0 + 1) * ts, (y1 - y0 + 1) * ts);
     }
 
-    private bool IsRegionClear(Rectangle box)
+    private bool IsRegionBuildable(Rectangle box)
     {
+        if (box.Width <= 0 || box.Height <= 0) return false;
         foreach (var dc in _dataCenters)
             if (dc.Bounds.Intersects(box))
                 return false;
-        return box.Width > 0 && box.Height > 0;
+        int ts = MapGenerator.TileSize;
+        for (int x = box.X / ts; x < (box.X + box.Width) / ts; x++)
+            for (int y = box.Y / ts; y < (box.Y + box.Height) / ts; y++)
+            {
+                if (x < 0 || x >= MapGenerator.GridWidth || y < 0 || y >= MapGenerator.GridHeight) continue;
+                var tile = _map.Tiles[x, y];
+                if (tile == TileType.River || tile == TileType.Town) return false;
+            }
+        return true;
     }
 
     private float CostOf(Rectangle box)
     {
         int ts = MapGenerator.TileSize;
-        int tiles = (box.Width / ts) * (box.Height / ts);
-        return tiles * COST_PER_TILE;
+        float cost = 0f;
+        for (int x = box.X / ts; x < (box.X + box.Width) / ts; x++)
+            for (int y = box.Y / ts; y < (box.Y + box.Height) / ts; y++)
+            {
+                if (x < 0 || x >= MapGenerator.GridWidth || y < 0 || y >= MapGenerator.GridHeight) continue;
+                cost += _map.Tiles[x, y] == TileType.Forest ? COST_PER_TILE * FOREST_BUILD_MULT : COST_PER_TILE;
+            }
+        return cost;
     }
 
     protected override void Draw(GameTime gameTime)
@@ -372,9 +416,13 @@ public class Game1 : Game
         for (int x = 0; x < MapGenerator.GridWidth; x++)
             for (int y = 0; y < MapGenerator.GridHeight; y++)
             {
+                if (_map.Tiles[x, y] != TileType.Empty) continue;
+                var rect = new Rectangle(x * ts, y * ts, ts, ts);
                 int t = _map.CatchmentTown[x, y];
-                if (t < 0 || _map.Tiles[x, y] != TileType.Empty) continue;
-                FillRect(new Rectangle(x * ts, y * ts, ts, ts), TownTints[t % TownTints.Length] * 0.13f);
+                if (t >= 0)
+                    FillRect(rect, TownTints[t % TownTints.Length] * 0.13f);
+                if (_map.Cooled[x, y])
+                    FillRect(rect, CoolingColor * 0.22f);
             }
     }
 
@@ -421,9 +469,9 @@ public class Game1 : Game
         if (!_dragging || _state != GameState.Playing) return;
         var mouse = Mouse.GetState();
         var box = TileBox(_dragStart, new Vector2(mouse.X, mouse.Y));
-        bool clear = IsRegionClear(box);
+        bool buildable = IsRegionBuildable(box);
         float cost = CostOf(box);
-        bool valid = clear && _money >= cost;
+        bool valid = buildable && _money >= cost;
         Color fill = valid ? ActiveFillColor : InvalidFillColor;
         Color outline = valid ? ActiveOutlineColor : InvalidOutlineColor;
 
@@ -436,7 +484,7 @@ public class Game1 : Game
                 OutlineRect(rect, outline);
             }
 
-        string label = clear ? $"Build: {cost.ToString("C0", Usd)}" : "Occupied";
+        string label = buildable ? $"Build: {cost.ToString("C0", Usd)}" : "Can't build here";
         _spriteBatch.DrawString(_font, label, new Vector2(box.X, box.Y - 24), valid ? Color.White : InvalidOutlineColor);
     }
 
@@ -464,7 +512,7 @@ public class Game1 : Game
 
     private void DrawHud()
     {
-        const int px = 10, py = 10, pw = 560, ph = 218;
+        const int px = 10, py = 10, pw = 560, ph = 250;
         DrawPanel(new Rectangle(px, py, pw, ph), 0.58f);
         int x = px + 14;
         int y = py + 12;
@@ -493,7 +541,8 @@ public class Game1 : Game
         Color servedColor = servedPct >= 99.5f ? Color.LightGreen : (servedPct >= 70f ? Color.White : Color.Orange);
         _spriteBatch.DrawString(_font, $"Demand: {demand:F0}    Served: {served:F0} ({servedPct:F0}%)", new Vector2(x, y), servedColor);
         y += 26;
-        _spriteBatch.DrawString(_font, $"Tiles: {_tileCount}    Next demand: {demand * (1f + DAILY_DEMAND_GROWTH):F0}", new Vector2(x, y), Color.LightGray);
+        float coolingSaving = OP_COST_PER_TILE * (1f - COOLED_OP_FACTOR) * _cooledTiles;
+        _spriteBatch.DrawString(_font, $"Tiles: {_tileCount}    Cooled: {_cooledTiles} (-{coolingSaving.ToString("C0", Usd)}/day)    Next demand: {demand * (1f + DAILY_DEMAND_GROWTH):F0}", new Vector2(x, y), Color.LightGray);
         y += 28;
 
         if (_day > 1)
@@ -507,6 +556,9 @@ public class Game1 : Game
         {
             _spriteBatch.DrawString(_font, "Build near towns to serve their demand - but don't crowd them.", new Vector2(x, y), Color.LightGray);
         }
+        y += 26;
+
+        _spriteBatch.DrawString(_font, "Blue tiles cool (cheap upkeep).  Forests calm nearby towns - costly to clear.", new Vector2(x, y), new Color(150, 220, 255));
         y += 28;
 
         _spriteBatch.DrawString(_font, "SPACE Next Day   Right-click Remove   R Retry   N New Map", new Vector2(x, y), Color.Gold);
