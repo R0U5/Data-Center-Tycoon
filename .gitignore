@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+Content/bin/
+Content/obj/
+
+# Runtime save file (created in the working directory at run time)
+save.dat
+
+# IDE / OS
+*.user
+.DS_Store
+
+# Python tooling
+tools/__pycache__/
