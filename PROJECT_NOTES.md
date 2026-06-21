@@ -44,7 +44,11 @@ happiness is now driven by *per-town crowding*, not total coverage.
 
 ## Quick Start
 
-Just build and run — works on Windows, Linux, and CI with no extra setup:
+**To just play it:** double-click **`Play.bat`** (Windows) — it builds and launches the game.
+For a portable, no-.NET-needed copy, double-click **`MakeStandalone.bat`** once (produces
+`Standalone\DataCenterTycoon.exe`). See `README.md`.
+
+For development — works on Windows, Linux, and CI with no extra setup:
 
 ```powershell
 cd <repo>

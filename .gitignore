@@ -3,6 +3,8 @@ bin/
 obj/
 Content/bin/
 Content/obj/
+Standalone/
+publish/
 
 # Runtime save file (created in the working directory at run time)
 save.dat
