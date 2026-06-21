@@ -44,36 +44,35 @@ happiness is now driven by *per-town crowding*, not total coverage.
 
 ## Quick Start
 
-Primary dev environment is **Windows 11** (Arial font present, MonoGame templates installed):
+Just build and run — works on Windows, Linux, and CI with no extra setup:
 
 ```powershell
 cd <repo>
 dotnet run
 ```
 
-Rebuild after edits (kill the running game first — the `.exe` locks):
+On Windows, rebuild after edits (kill the running game first — the `.exe` locks):
 
 ```powershell
 Get-Process -Name "DataCenterTycoon" -ErrorAction SilentlyContinue | Stop-Process -Force
 dotnet build
 ```
 
-### Building on Linux / CI (gotcha)
+### The font / content pipeline (important)
 
-The content pipeline builds `Content/Font.spritefont`, which references **Arial**. Arial is a
-Windows font and is **not** present on a stock Linux box, so the content build fails there with
-`Could not find "Arial" font file` (installing `fonts-liberation` does **not** fix it — MonoGame's
-`FontDescriptionProcessor` resolves the font by file/family, not via fontconfig aliases).
+The build **does not run MonoGame's content pipeline (`mgcb`)**. The csproj sets
+`EnableMGCBItems=false` and `AutoRestoreMGCBTool=false`, and the **pre-compiled font is committed at
+`Content/Font.xnb`** and copied to the output's `Content/` folder. This was done because the content
+build was fragile: `dotnet tool restore` (fetching `mgcb`) could fail on a fresh download
+(`MSB3073 ... "dotnet" tool restore exited with code 1`), and `mgcb` itself needs the **Arial** font
+(a Windows font absent on Linux/CI → `Could not find "Arial" font file`, which `fonts-liberation`
+does *not* fix). Shipping the prebuilt `.xnb` sidesteps all of that — no tool restore, no `mgcb`, no
+Arial, builds anywhere.
 
-To **compile-check the C# only** on Linux (skips the content build):
-
-```bash
-dotnet build -p:EnableMGCBItems=false
-```
-
-If you ever need a full Linux build, swap the spritefont's `<FontName>` to a font installed on the
-machine (e.g. `Liberation Sans`) — but do **not** commit that change, since it would alter the
-look on the user's Windows build.
+**To change the font** (`Content/Font.spritefont`): temporarily re-enable the pipeline
+(`dotnet build -p:EnableMGCBItems=true -p:AutoRestoreMGCBTool=true` on a machine with Arial + the
+`dotnet-mgcb` tool), then copy the regenerated `Content/bin/DesktopGL/Content/Font.xnb` over
+`Content/Font.xnb` and commit it.
 
 ---
 
