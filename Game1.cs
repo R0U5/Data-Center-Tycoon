@@ -19,7 +19,7 @@ public class Game1 : Game
 
     private const int WindowWidth = 1920;
     private const int WindowHeight = 1080;
-    private const string SaveFileName = "save.dat";
+    private static readonly string SaveFileName = Path.Combine(AppContext.BaseDirectory, "save.dat");
 
     private const float START_MONEY = 650f;
     private const float WIN_CASH_GOAL = 6000f;
