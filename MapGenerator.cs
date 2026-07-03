@@ -35,7 +35,7 @@ public class Town
 
 public class MapGenerator
 {
-    public const int TileSize = 40;
+    public const int TileSize = 36;
     public const int GridWidth = 48;
     public const int GridHeight = 27;
     public const int ServiceRadius = 6;

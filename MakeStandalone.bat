@@ -1,5 +1,5 @@
 @echo off
-rem Double-click this once to build a standalone, portable copy of the game.
+rem Double-click this once to build a standalone, portable copy of DATA TYCOON.
 rem The result needs no .NET install - copy the "Standalone" folder anywhere
 rem and double-click DataCenterTycoon.exe inside it.
 cd /d "%~dp0"
