@@ -1,5 +1,5 @@
 @echo off
-rem Double-click this file to build and run Data Center Tycoon.
+rem Double-click this file to build and run DATA TYCOON.
 cd /d "%~dp0"
 
 where dotnet >nul 2>nul
@@ -12,7 +12,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Building Data Center Tycoon...
+echo Building Data Tycoon...
 dotnet build -c Release -v quiet
 if errorlevel 1 (
   echo.
