@@ -55,6 +55,25 @@ public class Sim
     public int PeakStructures { get; private set; }
     public int PeakDemandServed { get; private set; }
 
+    public float EvDemandMult { get; private set; } = 1f;
+    public float EvRevenueMult { get; private set; } = 1f;
+    public float EvUpkeepMult { get; private set; } = 1f;
+    public float EvBuildCostMult { get; private set; } = 1f;
+    public float EvNimbyMult { get; private set; } = 1f;
+    public float EvComfortAdd { get; private set; }
+    public bool HasModifiers => Math.Abs(EvDemandMult - 1f) > 0.0001f || Math.Abs(EvRevenueMult - 1f) > 0.0001f
+        || Math.Abs(EvUpkeepMult - 1f) > 0.0001f || Math.Abs(EvBuildCostMult - 1f) > 0.0001f
+        || Math.Abs(EvNimbyMult - 1f) > 0.0001f || Math.Abs(EvComfortAdd) > 0.0001f;
+
+    public GameEvent PendingChoice { get; private set; }
+    public string LastEventHeadline { get; private set; } = "";
+    public string LastEventBlurb { get; private set; } = "";
+    public int LastEventDay { get; private set; } = -1;
+    public bool LastEventGood { get; private set; }
+
+    private readonly List<(GameEvent ev, int expiresDay)> _activeEvents = new();
+    private Random _rng;
+
     private float[] _townCompute = Array.Empty<float>();
     private float[] _townLoad = Array.Empty<float>();
     private float[] _townParkComfort = Array.Empty<float>();
@@ -90,9 +109,98 @@ public class Sim
         PeakDay = 1;
         PeakStructures = 0;
         PeakDemandServed = 0;
+        _rng = new Random(unchecked((int)(Map.Seed * 2654435761L) ^ 0x5eed));
+        _activeEvents.Clear();
+        PendingChoice = null;
+        LastEventHeadline = "";
+        LastEventBlurb = "";
+        LastEventDay = -1;
+        LastEventGood = false;
+        RecomputeEventModifiers();
         InitTownState();
         RecalculateAggregates();
     }
+
+    private void RecomputeEventModifiers()
+    {
+        EvDemandMult = EvRevenueMult = EvUpkeepMult = EvBuildCostMult = EvNimbyMult = 1f;
+        EvComfortAdd = 0f;
+        foreach (var (ev, _) in _activeEvents)
+        {
+            EvDemandMult *= ev.Effects.DemandMult;
+            EvRevenueMult *= ev.Effects.RevenueMult;
+            EvUpkeepMult *= ev.Effects.UpkeepMult;
+            EvBuildCostMult *= ev.Effects.BuildCostMult;
+            EvNimbyMult *= ev.Effects.NimbyMult;
+            EvComfortAdd += ev.Effects.ComfortAdd;
+        }
+    }
+
+    private void TickEvents()
+    {
+        for (int i = _activeEvents.Count - 1; i >= 0; i--)
+            if (_activeEvents[i].expiresDay <= Day) _activeEvents.RemoveAt(i);
+        RecomputeEventModifiers();
+    }
+
+    public IReadOnlyList<(GameEvent ev, int expiresDay)> ActiveEvents => _activeEvents;
+
+    public bool EventsEnabled { get; set; }
+
+    private void RollEvent()
+    {
+        if (!EventsEnabled || _rng == null) return;
+        var pool = EventCatalog.Rollable(Day).Where(e => !_activeEvents.Any(a => a.ev.Id == e.Id)).ToList();
+        if (pool.Count == 0) return;
+        float chance = 0.30f;
+        if (_rng.NextDouble() > chance) return;
+        var ev = pool[_rng.Next(pool.Count)];
+        ApplyEvent(ev);
+    }
+
+    public void ApplyEvent(GameEvent ev)
+    {
+        LastEventHeadline = ev.Headline;
+        LastEventBlurb = ev.Blurb;
+        LastEventDay = Day;
+        LastEventGood = ev.Good;
+        if (ev.Kind == EventKind.Timed)
+        {
+            _activeEvents.RemoveAll(a => a.ev.Id == ev.Id);
+            _activeEvents.Add((ev, Day + ev.Duration));
+            RecomputeEventModifiers();
+        }
+        else if (ev.Kind == EventKind.Choice)
+        {
+            PendingChoice = ev;
+        }
+        else
+        {
+            Money += ev.Effects.Cash;
+            RecomputeEventModifiers();
+        }
+    }
+
+    public bool ResolveChoice(bool chooseA)
+    {
+        if (PendingChoice == null) return false;
+        var ev = PendingChoice;
+        var eff = chooseA ? ev.ChoiceA!.Value.effects : ev.ChoiceB!.Value.effects;
+        Money += eff.Cash;
+        LastEventGood = eff.Cash >= 0f && eff.NimbyMult <= 1f;
+        if (ev.Duration > 0)
+        {
+            _activeEvents.RemoveAll(a => a.ev.Id == ev.Id);
+            _activeEvents.Add((ev, Day + ev.Duration));
+        }
+        _choicePersist = eff;
+        PendingChoice = null;
+        RecomputeEventModifiers();
+        RecalculateAggregates();
+        return true;
+    }
+
+    private EventEffects _choicePersist;
 
     private void InitTownState()
     {
@@ -130,7 +238,7 @@ public class Sim
     public float TownCompute(int id) => _townCompute[id];
     public float TownParkComfort(int id) => _townParkComfort[id];
     public float TownLoad(int id) => _townLoad[id];
-    public float TownComfort(int id) => COMFORT_PER_SIZE * Map.Towns[id].Size + _townParkComfort[id];
+    public float TownComfort(int id) => COMFORT_PER_SIZE * Map.Towns[id].Size + _townParkComfort[id] + EvComfortAdd;
     public float TownLoadRatio(int id)
     {
         float c = TownComfort(id);
@@ -172,7 +280,7 @@ public class Sim
         float comfort = TownComfort(id);
         if (comfort <= 0f) return 0f;
         float crowding = NIMBY_WEIGHT * (float)Math.Pow(_townLoad[id] / comfort, NIMBY_EXP);
-        return crowding * (1f - TownRelief(id));
+        return crowding * (1f - TownRelief(id)) * EvNimbyMult;
     }
 
     public float BrownoutFraction()
@@ -212,7 +320,7 @@ public class Sim
 
     public float TileCostAt(int x, int y, StructureType type)
     {
-        float baseCost = Structures.Get(type).Cost;
+        float baseCost = Structures.Get(type).Cost * EvBuildCostMult;
         if (Map.Tiles[x, y] == TileType.Forest) baseCost *= FOREST_BUILD_MULT;
         float credit = Grid[x, y] != StructureType.None ? Paid[x, y] * REFUND_FRACTION : 0f;
         return Math.Max(0f, baseCost - credit);
@@ -304,7 +412,7 @@ public class Sim
     {
         if (State != RunState.Playing) return;
         var (_, served) = DemandServed();
-        LastRevenue = REVENUE_PER_SERVED * served;
+        LastRevenue = REVENUE_PER_SERVED * served * EvRevenueMult;
         LastOpCost = _upkeepTotal;
         LastPassive = _passiveIncome;
         LastCoolingSaving = CoolingSaving;
@@ -313,8 +421,10 @@ public class Sim
 
         Happiness = ProjectedHappiness();
 
-        TotalDemand *= 1f + DAILY_DEMAND_GROWTH;
+        TotalDemand *= (1f + DAILY_DEMAND_GROWTH) * EvDemandMult;
         Day++;
+        TickEvents();
+        RollEvent();
 
         if (NetWorth > PeakValue)
         {
@@ -421,6 +531,8 @@ public class Sim
         sb.AppendLine($"peakday={PeakDay}");
         sb.AppendLine(FormattableString.Invariant($"served={PeakDemandServed}"));
         sb.AppendLine($"structs={PeakStructures}");
+        foreach (var (ev, exp) in _activeEvents)
+            sb.AppendLine($"ev={ev.Id},{exp}");
         for (int x = 0; x < MapGenerator.GridWidth; x++)
             for (int y = 0; y < MapGenerator.GridHeight; y++)
                 if (Grid[x, y] != StructureType.None)
@@ -454,6 +566,7 @@ public class Sim
         float peak = -1f;
         int peakDay = 1, servedPeak = 0, structsPeak = 0;
         var tiles = new List<(int x, int y, StructureType s, float paid)>();
+        var events = new List<(string id, int exp)>();
 
         foreach (var line in lines.Skip(1))
         {
@@ -474,6 +587,10 @@ public class Sim
                 case "peakday": int.TryParse(val, out peakDay); break;
                 case "served": int.TryParse(val, out servedPeak); break;
                 case "structs": int.TryParse(val, out structsPeak); break;
+                case "ev":
+                    var ep = val.Split(',');
+                    if (ep.Length == 2 && int.TryParse(ep[1], out var exp)) events.Add((ep[0], exp));
+                    break;
                 case "s":
                     var p = val.Split(',');
                     if (p.Length == 4
@@ -504,6 +621,12 @@ public class Sim
                 ? $"YOU BUILT A ${WIN_CASH_GOAL:N0} COMPUTE EMPIRE"
                 : (state == RunState.Lost ? "YOUR RUN ENDED" : "");
         sim.RecalculateAggregates();
+        foreach (var (id, exp) in events)
+        {
+            var ev = EventCatalog.ById(id);
+            if (ev != null && exp > sim.Day) sim._activeEvents.Add((ev, exp));
+        }
+        sim.RecomputeEventModifiers();
         sim.PeakValue = peak >= 0f ? Math.Max(peak, sim.NetWorth) : sim.NetWorth;
         sim.PeakDay = peakDay;
         sim.PeakDemandServed = servedPeak;

@@ -251,7 +251,12 @@ public class Game1 : Game
             if (Pressed(keyboard, Keys.X)) SelectTool(Tool.Raze);
             if (Pressed(keyboard, Keys.Space)) AdvanceDay();
             if (Pressed(keyboard, Keys.Z)) Undo();
-            HandleMouse(v, mouse);
+            if (_sim.PendingChoice != null)
+            {
+                if (Pressed(keyboard, Keys.D1)) { _sim.ResolveChoice(true); _sfx.Play(Sound.Select, 0.5f); SaveGame(); }
+                if (Pressed(keyboard, Keys.D2)) { _sim.ResolveChoice(false); _sfx.Play(Sound.Select, 0.5f); SaveGame(); }
+            }
+            else HandleMouse(v, mouse);
         }
 
         _prevMouse = mouse;
@@ -446,6 +451,7 @@ public class Game1 : Game
             DrawToasts();
             DrawTicker();
             DrawTooltip(v);
+            DrawEventBanner();
             if (_showHelp) DrawHelp();
             if (_screen == Screen.Ended) DrawEndScreen();
         }
@@ -728,6 +734,17 @@ public class Game1 : Game
             ($"COOLED {_sim.CooledStructureTiles}/{_sim.StructureTiles}", TextCyan),
         });
 
+        if (_sim.HasModifiers)
+        {
+            var mods = new List<(string, Color)>();
+            if (Math.Abs(_sim.EvDemandMult - 1f) > 0.0001f) mods.Add(($"DEMAND x{_sim.EvDemandMult:F2}", _sim.EvDemandMult >= 1f ? TextGreen : TextRed));
+            if (Math.Abs(_sim.EvRevenueMult - 1f) > 0.0001f) mods.Add(($"REVENUE x{_sim.EvRevenueMult:F2}", _sim.EvRevenueMult >= 1f ? TextGreen : TextRed));
+            if (Math.Abs(_sim.EvUpkeepMult - 1f) > 0.0001f) mods.Add(($"UPKEEP x{_sim.EvUpkeepMult:F2}", _sim.EvUpkeepMult <= 1f ? TextGreen : TextRed));
+            if (Math.Abs(_sim.EvBuildCostMult - 1f) > 0.0001f) mods.Add(($"BUILD x{_sim.EvBuildCostMult:F2}", _sim.EvBuildCostMult <= 1f ? TextGreen : TextRed));
+            if (Math.Abs(_sim.EvNimbyMult - 1f) > 0.0001f) mods.Add(($"ANGER x{_sim.EvNimbyMult:F2}", _sim.EvNimbyMult <= 1f ? TextGreen : TextRed));
+            if (mods.Count > 0) y = DrawChunk(x, y, "ACTIVE EVENTS", mods.ToArray());
+        }
+
         int by = 360;
         _font.Draw(_spriteBatch, "BUILD", x, by - 20, TextDim);
         for (int i = 0; i < ToolDefs.Length; i++)
@@ -844,6 +861,61 @@ public class Game1 : Game
         FillRect(r, Color.Black * 0.75f);
         OutlineRect(r, TextGold);
         _font.Draw(_spriteBatch, _tickerText, r.X + 12, r.Y + 9, TextGold);
+    }
+
+    private void DrawEventBanner()
+    {
+        if (_sim.PendingChoice != null) { DrawChoiceDialog(_sim.PendingChoice); return; }
+        if (_sim.LastEventDay < 0 || _sim.LastEventDay != _sim.Day) return;
+        if (_clock >= _tickerUntil + 4.5f) return;
+
+        var ev = _sim.HasModifiers ? _sim : _sim;
+        string headline = _sim.LastEventHeadline;
+        string blurb = _sim.LastEventBlurb;
+        Color accent = _sim.LastEventGood ? TextGreen : TextOrange;
+
+        int w = 900;
+        var r = new Rectangle((MapW - w) / 2, 16, w, 74);
+        FillRect(r, new Color(10, 10, 16) * 0.92f);
+        OutlineRect(r, accent);
+        FillRect(new Rectangle(r.X, r.Y, 4, r.Height), accent);
+        _font.Draw(_spriteBatch, _sim.LastEventGood ? "EVENT" : "EVENT", r.X + 16, r.Y + 12, accent, 2);
+        _font.Draw(_spriteBatch, headline, r.X + 110, r.Y + 12, Color.White, 2);
+        _font.Draw(_spriteBatch, blurb, r.X + 16, r.Y + 42, TextDim);
+    }
+
+    private void DrawChoiceDialog(GameEvent ev)
+    {
+        FillRect(new Rectangle(0, 0, TargetWidth, TargetHeight), Color.Black * 0.78f);
+        int w = 980, h = 330;
+        var panel = new Rectangle((TargetWidth - w) / 2, (TargetHeight - h) / 2, w, h);
+        FillRect(panel, PanelColor);
+        OutlineRect(panel, TextGold);
+
+        int x = panel.X + 28, y = panel.Y + 24;
+        _font.Draw(_spriteBatch, "DECISION", x, y, TextGold, 3); y += 46;
+        _font.Draw(_spriteBatch, ev.Headline, x, y, Color.White, 2); y += 34;
+        _font.Draw(_spriteBatch, ev.Blurb, x, y, TextDim); y += 48;
+
+        _font.Draw(_spriteBatch, $"1) {ev.ChoiceA!.Value.label}", x, y, TextCyan, 2);
+        _font.Draw(_spriteBatch, $"2) {ev.ChoiceB!.Value.label}", x, y + 44, TextCyan, 2); y += 120;
+        _font.Draw(_spriteBatch, "PRESS 1 OR 2 TO CHOOSE", x, y, TextGold);
+    }
+
+    private void DrawActiveModifiers(int x, int y)
+    {
+        if (!_sim.HasModifiers) return;
+        _font.Draw(_spriteBatch, "ACTIVE EVENTS", x, y, TextOrange); y += 18;
+        if (Math.Abs(_sim.EvDemandMult - 1f) > 0.0001f)
+        { _font.Draw(_spriteBatch, $"DEMAND x{_sim.EvDemandMult:F2}", x, y, _sim.EvDemandMult >= 1f ? TextGreen : TextRed); y += 16; }
+        if (Math.Abs(_sim.EvRevenueMult - 1f) > 0.0001f)
+        { _font.Draw(_spriteBatch, $"REVENUE x{_sim.EvRevenueMult:F2}", x, y, _sim.EvRevenueMult >= 1f ? TextGreen : TextRed); y += 16; }
+        if (Math.Abs(_sim.EvUpkeepMult - 1f) > 0.0001f)
+        { _font.Draw(_spriteBatch, $"UPKEEP x{_sim.EvUpkeepMult:F2}", x, y, _sim.EvUpkeepMult <= 1f ? TextGreen : TextRed); y += 16; }
+        if (Math.Abs(_sim.EvBuildCostMult - 1f) > 0.0001f)
+        { _font.Draw(_spriteBatch, $"BUILD COST x{_sim.EvBuildCostMult:F2}", x, y, _sim.EvBuildCostMult <= 1f ? TextGreen : TextRed); y += 16; }
+        if (Math.Abs(_sim.EvNimbyMult - 1f) > 0.0001f)
+        { _font.Draw(_spriteBatch, $"ANGER x{_sim.EvNimbyMult:F2}", x, y, _sim.EvNimbyMult <= 1f ? TextGreen : TextRed); y += 16; }
     }
 
     private static readonly string[] Tooltips =

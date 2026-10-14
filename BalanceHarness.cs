@@ -69,15 +69,20 @@ public static class BalanceHarness
             Report(seeds, policy);
 
         Console.WriteLine();
+        Console.WriteLine("== SATIRICAL EVENTS ON (opt-in 'news cycle' mode) ==");
+        foreach (var policy in new[] { Policies[3], ExtendedPolicies[0] })
+            Report(seeds, policy, events: true);
+
+        Console.WriteLine();
         Console.WriteLine("healthy: naive REVOLTS, sheds-only never WINS, skilled WINS on ~all seeds,");
         Console.WriteLine("         overpack mostly REVOLTS, sprawl goes BANKRUPT.");
     }
 
-    private static void Report(int seeds, Policy policy)
+    private static void Report(int seeds, Policy policy, bool events = false)
     {
         var outcomes = new List<(string outcome, int day, float peak, float happy)>();
         for (int s = 0; s < seeds; s++)
-            outcomes.Add(RunOne(new MapGenerator(1000L + s * 7919L), policy));
+            outcomes.Add(RunOne(new MapGenerator(1000L + s * 7919L), policy, events));
 
         int wins = outcomes.Count(o => o.outcome == "WIN");
         int revolts = outcomes.Count(o => o.outcome == "REVOLT");
@@ -199,9 +204,9 @@ public static class BalanceHarness
         Console.WriteLine($"end: {sim.State} {sim.EndReason}");
     }
 
-    private static (string, int, float, float) RunOne(MapGenerator map, Policy policy)
+    private static (string, int, float, float) RunOne(MapGenerator map, Policy policy, bool events = false)
     {
-        var sim = new Sim(map);
+        var sim = new Sim(map) { EventsEnabled = events };
         var towns = BuildTownPlans(map);
         float peak = sim.Money;
 

@@ -161,6 +161,45 @@ shortfall penalty only applies once a plant exists (`Sim.PowerShortfallActive`).
 
 ---
 
+## Satirical events (opt-in "news cycle" mode)
+
+Random events modelled on real 2024-2026 AI-industry news, lightly disguised (no real names; the
+paraphrase should still be recognisable). **Off by default** — `Sim.EventsEnabled` gates every
+roll, so the vanilla ladder stays byte-identical and a player can ignore the feature entirely.
+
+A roll happens each `AdvanceDay` (30% chance) when enabled. Modifiers are multiplicative scalars
+on demand / revenue / upkeep / build-cost / anger, plus a flat comfort or cash delta:
+
+| id | headline | effect |
+|---|---|---|
+| TARIFF_SHOCK | TARIFF ON IMPORTED AI CHIPS | build x1.35, 6d |
+| MINERAL_EMBARGO | RARE-EARTH EXPORT BAN | upkeep x1.25, 5d |
+| SUPERINTELLIGENCE_RENAME | IT IS 'SUPERINTELLIGENCE' NOW | demand x1.20, 5d |
+| BAD_PRESS | INVESTIGATIVE PIECE ON YOUR WATER USE | demand x0.85 + anger x1.15, 4d |
+| BUBBLE_FEAR | ANALYST WARNS OF AN AI BUBBLE | demand x0.90 + revenue x0.92, 3d |
+| GPU_SHORTAGE | ACCELERATORS ON BACKORDER | build x1.5, 5d |
+| TALENT_WAR | RIVAL POACHES YOUR WHOLE TEAM | upkeep x1.3, 4d |
+| POWER_PRICE_SPIKE | VOTERS FURIOUS OVER ELECTRICITY BILLS | upkeep x1.2 + anger x1.1, 5d |
+| GOLD_RUSH | HYPERSCALERS ANNOUNCE RECORD CAPEX | demand x1.25, 4d |
+| DROUGHT | DROUGHT YEAR: COOLING RESERVES LOW | upkeep x1.3, 6d |
+| NIMBY_COUNCIL | COUNTY COUNCIL BLOCKS NEW ZONING | anger x1.25, 6d |
+| SUBSIDY | STATE OFFERS COMPUTE SUBSIDIES | revenue x1.2, 5d |
+| ENDORSEMENT | A MOVIE STAR MENTIONS YOUR SERVERS | demand x1.15, 3d |
+| REGULATION | SWEEPING AI SAFETY LAW PASSES | upkeep x1.15 + demand x1.05, 8d |
+| REBRAND_RIVAL | A RIVAL REBRANDS TO 'SYNERGETIC INTELLIGENCE' | demand x1.1, 3d |
+| CELEB_POST | INDUSTRY FIGURE POSTS AN UNHINGED THREAD | demand x1.12, 2d |
+| GRANT_STRINGS | a state offers you a grant | **choice**: $2,500 cash / anger +25%, or +6 comfort |
+| BUY_RIVAL | a failing rival is for sale | **choice**: -$1,800 for demand x1.3, or pass |
+
+Choice events pause the game (`Sim.PendingChoice`) and are resolved with `Sim.ResolveChoice`.
+The UI shows a banner, a choice dialog (keys 1/2), and an ACTIVE EVENTS sidebar chunk.
+Research notes: `docs/EVENTS_RESEARCH.md`.
+
+Events-mode ladder (`--sim`, opt-in section): skilled 6/16 day 65, power 3/16 day 77 — a real
+difficulty bump for players who want it, with zero effect on the base game.
+
+---
+
 ## Tunable constants
 
 `Sim.cs`:
