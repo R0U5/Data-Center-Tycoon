@@ -18,6 +18,20 @@ public class Game1 : Game
     private const int SideX = MapW;
     private const int SideW = TargetWidth - MapW;
 
+    private static readonly Rectangle SetupFrame = new(440, 90, 1040, 870);
+    private static readonly Rectangle BtnDiffMinus = new(750, 280, 44, 44);
+    private static readonly Rectangle BtnDiffPlus = new(926, 280, 44, 44);
+    private static readonly Rectangle BtnEvents = new(750, 430, 140, 40);
+    private static readonly Rectangle BtnStart = new(680, 580, 260, 70);
+    private static readonly Rectangle BtnBack = new(980, 580, 260, 70);
+
+    private readonly record struct SetupRow(string label, Rectangle rect, int action);
+    private SetupRow[] _setupRows = Array.Empty<SetupRow>();
+    private int _setupSel = 3; // START is default
+
+    private Rectangle _menuPanel;
+    private int _hoverSel = 0;
+
     private static readonly string SaveFileName = Path.Combine(AppContext.BaseDirectory, "save.dat");
     private static readonly string SettingsFileName = Path.Combine(AppContext.BaseDirectory, "settings.dat");
     private static readonly CultureInfo Usd = CultureInfo.GetCultureInfo("en-US");
@@ -105,7 +119,7 @@ public class Game1 : Game
     private bool _setupOpen;
     private readonly record struct SetupRect(string label, Rectangle rect, int action);
     private SetupRect[] _setupRects = Array.Empty<SetupRect>();
-    private int _setupHover = -1;
+
 
     public Game1(string shotPath = null, long? shotSeed = null, int shotDays = 0)
     {
@@ -166,36 +180,37 @@ public class Game1 : Game
 
     private void BuildMenuButtons()
     {
-        int w = 440, h = 56, cx = TargetWidth / 2 - w / 2;
-        int y = TargetHeight / 2 - 100;
+        var labels = new List<(string label, int action)>();
+        if (File.Exists(SaveFileName)) labels.Add(("CONTINUE", 0));
+        labels.Add(("NEW GAME", 1));
+        labels.Add((_soundOn ? "SOUND: ON" : "SOUND: OFF", 2));
+        labels.Add(("QUIT", 3));
+
+        int itemW = 420, itemH = 60, gap = 16;
+        int total = labels.Count * itemH + (labels.Count - 1) * gap;
+        int y0 = (TargetHeight - total) / 2 + 60;
+        int x = TargetWidth / 2 - itemW / 2;
+
         var list = new List<MenuButton>();
-        if (File.Exists(SaveFileName))
-        {
-            list.Add(new MenuButton("CONTINUE", new Rectangle(cx, y, w, h), 0));
-            y += h + 16;
-        }
-        list.Add(new MenuButton("NEW GAME", new Rectangle(cx, y, w, h), 1));
-        y += h + 16;
-        list.Add(new MenuButton(_soundOn ? "SOUND: ON" : "SOUND: OFF", new Rectangle(cx, y, w, h), 2));
-        y += h + 16;
-        list.Add(new MenuButton("QUIT", new Rectangle(cx, y, w, h), 3));
+        for (int i = 0; i < labels.Count; i++)
+            list.Add(new MenuButton(labels[i].label, new Rectangle(x, y0 + i * (itemH + gap), itemW, itemH), labels[i].action));
         _menuButtons = list.ToArray();
+
+        _menuPanel = new Rectangle(x - 60, y0 - 70, itemW + 120, total + 140);
+        _hoverSel = Math.Clamp(_hoverSel, 0, _menuButtons.Length - 1);
         BuildSetupRects();
     }
 
     private void BuildSetupRects()
     {
-        int w = 360, h = 52, cx = TargetWidth / 2 - w / 2;
-        int y = 470;
-        var list = new List<SetupRect>();
-        list.Add(new SetupRect("EASIER", new Rectangle(cx - 190, y, 120, h), 10));
-        list.Add(new SetupRect("HARDER", new Rectangle(cx + 190 - 120 + 250, y, 120, h), 11));
-        y += h + 18;
-        list.Add(new SetupRect("TOGGLE EVENTS", new Rectangle(cx, y, w, h), 12));
-        y += h + 18;
-        list.Add(new SetupRect("START", new Rectangle(cx, y + 12, w, 60), 13));
-        list.Add(new SetupRect("BACK", new Rectangle(60, TargetHeight - 90, 160, 52), 14));
-        _setupRects = list.ToArray();
+        var list = new List<SetupRow>();
+        list.Add(new SetupRow("DIFFICULTY", BtnDiffMinus, 10)); // minus button
+        list.Add(new SetupRow("DIFFICULTY", BtnDiffPlus, 11));  // plus button
+        list.Add(new SetupRow("EVENTS", BtnEvents, 12));          // toggle
+        list.Add(new SetupRow("START", BtnStart, 13));
+        list.Add(new SetupRow("BACK", BtnBack, 14));
+        _setupRows = list.ToArray();
+        _setupSel = Math.Clamp(_setupSel, 0, _setupRows.Length - 1);
     }
 
     private void ApplySoundState()
@@ -302,24 +317,20 @@ public class Game1 : Game
 
     private void UpdateMenu(Point v, MouseState raw, KeyboardState keyboard)
     {
-        _hover = -1;
-        for (int i = 0; i < _menuButtons.Length; i++)
-            if (_menuButtons[i].rect.Contains(v.X, v.Y)) _hover = i;
+        int n = _menuButtons.Length;
+        _hoverSel = Math.Clamp(_hoverSel, 0, n - 1);
 
-        if (Pressed(keyboard, Keys.Down) || Pressed(keyboard, Keys.S))
-        { _hoverSel = (_hoverSel + 1) % _menuButtons.Length; _sfx.Play(Sound.Select, 0.3f); }
-        if (Pressed(keyboard, Keys.Up) || Pressed(keyboard, Keys.W))
-        { _hoverSel = (_hoverSel - 1 + _menuButtons.Length) % _menuButtons.Length; _sfx.Play(Sound.Select, 0.3f); }
-        if (_hover >= 0) _hoverSel = _hover;
-        _hover = _hoverSel;
+        int hoverIdx = -1;
+        for (int i = 0; i < n; i++)
+            if (_menuButtons[i].rect.Contains(v.X, v.Y)) hoverIdx = i;
+        if (hoverIdx >= 0) _hoverSel = hoverIdx;
+
+        if (Pressed(keyboard, Keys.Down) || Pressed(keyboard, Keys.S)) { _hoverSel = (_hoverSel + 1) % n; _sfx.Play(Sound.Select, 0.3f); }
+        if (Pressed(keyboard, Keys.Up) || Pressed(keyboard, Keys.W)) { _hoverSel = (_hoverSel - 1 + n) % n; _sfx.Play(Sound.Select, 0.3f); }
 
         bool click = raw.LeftButton == ButtonState.Pressed && _prevMouse.LeftButton == ButtonState.Released;
-        if ((click && _hover >= 0) || Pressed(keyboard, Keys.Enter))
-        {
-            if (_hover < 0) _hover = _menuButtons.Length > 1 ? 0 : 0;
-            _sfx.Play(Sound.Select, 0.4f);
-            DoMenuAction(_menuButtons[_hover].action);
-        }
+        if (click && hoverIdx >= 0) { _sfx.Play(Sound.Select, 0.4f); DoMenuAction(_menuButtons[hoverIdx].action); return; }
+        if (Pressed(keyboard, Keys.Enter)) { _sfx.Play(Sound.Select, 0.45f); DoMenuAction(_menuButtons[Math.Clamp(_hoverSel, 0, n - 1)].action); }
     }
 
     private void DoMenuAction(int action)
@@ -336,34 +347,25 @@ public class Game1 : Game
 
     private void UpdateSetup(Point v, MouseState raw, KeyboardState keyboard)
     {
-        _setupHover = -1;
-        for (int i = 0; i < _setupRects.Length; i++)
-            if (_setupRects[i].rect.Contains(v.X, v.Y)) _setupHover = i;
+        int n = _setupRows.Length;
+        _setupSel = Math.Clamp(_setupSel, 0, n - 1);
 
-        if (Pressed(keyboard, Keys.Down) || Pressed(keyboard, Keys.S))
-        { _setupSel = (_setupSel + 1) % _setupRects.Length; _sfx.Play(Sound.Select, 0.3f); }
-        if (Pressed(keyboard, Keys.Up) || Pressed(keyboard, Keys.W))
-        { _setupSel = (_setupSel - 1 + _setupRects.Length) % _setupRects.Length; _sfx.Play(Sound.Select, 0.3f); }
+        int hoverIdx = -1;
+        for (int i = 0; i < n; i++)
+            if (_setupRows[i].rect.Contains(v.X, v.Y)) hoverIdx = i;
+        if (hoverIdx >= 0) _setupSel = hoverIdx;
+
+        if (Pressed(keyboard, Keys.Down) || Pressed(keyboard, Keys.S)) { _setupSel = (_setupSel + 1) % n; _sfx.Play(Sound.Select, 0.3f); }
+        if (Pressed(keyboard, Keys.Up) || Pressed(keyboard, Keys.W)) { _setupSel = (_setupSel - 1 + n) % n; _sfx.Play(Sound.Select, 0.3f); }
         if (Pressed(keyboard, Keys.Left) || Pressed(keyboard, Keys.A)) { CycleDifficulty(-1); _sfx.Play(Sound.Select, 0.35f); }
         if (Pressed(keyboard, Keys.Right) || Pressed(keyboard, Keys.D)) { CycleDifficulty(1); _sfx.Play(Sound.Select, 0.35f); }
-        if (_setupHover >= 0) _setupSel = _setupHover;
 
         bool click = raw.LeftButton == ButtonState.Pressed && _prevMouse.LeftButton == ButtonState.Released;
-        if (click && _setupHover >= 0)
-        {
-            _sfx.Play(Sound.Select, 0.4f);
-            DoSetupAction(_setupRects[_setupHover].action);
-        }
-        else if (Pressed(keyboard, Keys.Enter))
-        {
-            _sfx.Play(Sound.Select, 0.45f);
-            DoSetupAction(_setupRects[_setupSel].action);
-        }
+        if (click && hoverIdx >= 0) { _sfx.Play(Sound.Select, 0.4f); DoSetupAction(_setupRows[hoverIdx].action); return; }
+        if (Pressed(keyboard, Keys.Enter)) { _sfx.Play(Sound.Select, 0.45f); DoSetupAction(_setupRows[Math.Clamp(_setupSel, 0, n - 1)].action); }
         if (Pressed(keyboard, Keys.Escape)) _setupOpen = false;
     }
 
-    private int _hoverSel;
-    private int _setupSel;
     private string _lastScoreOutcome = "";
     private int _lastScoreRank = -1;
 
@@ -665,43 +667,45 @@ public class Game1 : Game
 
     private void ComposeSoftSetup(SoftCanvas c)
     {
-        var frame = new Rectangle(TargetWidth / 2 - 520, 90, 1040, TargetHeight - 210);
+        var frame = SetupFrame;
         SoftBevel(c, frame, new Color(22, 24, 32));
         c.Fill(new Rectangle(frame.X + 4, frame.Y + 4, frame.Width - 8, frame.Height - 8), ChunkFill);
+
         SoftText(c, "NEW GAME", TargetWidth / 2 - 130, 130, TextGold, 6);
         SoftTextCentered(c, "CONFIGURE YOUR OPERATION", 220, TextDim, 2);
 
         var t = Sim.DifficultyTuning(_selDifficulty);
         int cx = TargetWidth / 2;
-        SoftText(c, "DIFFICULTY", cx - 420, 300, TextCyan, 2);
-        SoftText(c, "<", cx - 250, 296, TextGold, 2);
-        SoftText(c, DifficultyName(_selDifficulty), cx - 226, 296, Color.White, 2);
-        SoftText(c, ">", cx - 226 + _font.Width(DifficultyName(_selDifficulty)) + 12, 296, TextGold, 2);
-        SoftText(c, DifficultyBlurb(_selDifficulty), cx - 226, 332, TextDim, 2);
-        SoftText(c, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", cx - 420, 360, TextDim, 2);
 
-        SoftText(c, "EVENTS", cx - 420, 440, TextCyan, 2);
-        SoftText(c, _selEvents ? "[ ON ]" : "[ OFF ]", cx - 226, 440, _selEvents ? TextGreen : TextDim, 2);
-        SoftText(c, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", cx - 226, 472, TextDim, 2);
+        // Difficulty row
+        SoftText(c, "DIFFICULTY", cx - 310, 286, TextCyan, 2);
+        SoftText(c, "<", BtnDiffMinus.X + 12, BtnDiffMinus.Y + 8, TextGold, 3);
+        SoftText(c, DifficultyName(_selDifficulty), BtnDiffMinus.X + BtnDiffMinus.Width + 16, 292, Color.White, 2);
+        SoftText(c, ">", BtnDiffPlus.X + 12, BtnDiffPlus.Y + 8, TextGold, 3);
+        SoftText(c, DifficultyBlurb(_selDifficulty), cx - 310, 332, TextDim, 2);
+        SoftText(c, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", cx - 310, 360, TextDim, 2);
 
-        foreach (var s in _setupRects)
+        // Events row
+        SoftText(c, "EVENTS", cx - 310, 426, TextCyan, 2);
+        var toggleText = _selEvents ? "ON" : "OFF";
+        var toggleX = BtnEvents.X + (BtnEvents.Width - _font.Width(toggleText, 2)) / 2;
+        var toggleY = BtnEvents.Y + (BtnEvents.Height - _font.Height(2)) / 2;
+        SoftBevel(c, BtnEvents, _selEvents ? new Color(40, 60, 44) : ChunkFill);
+        SoftText(c, toggleText, toggleX, toggleY, _selEvents ? TextGreen : TextDim, 2);
+        SoftText(c, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", cx - 310, 472, TextDim, 2);
+
+        // Rows
+        foreach (var s in _setupRows)
         {
-            bool sel = _setupSel >= 0 && _setupRects[_setupSel].action == s.action;
-            int tw = _font.Width(s.label, s.action >= 13 ? 3 : 2);
+            bool sel = _setupSel >= 0 && _setupRows[_setupSel].action == s.action;
+            int tw = _font.Width(s.label, 3);
             int tx = s.rect.X + (s.rect.Width - tw) / 2;
-            int scale = s.action >= 13 ? 3 : 2;
-            int ty = s.rect.Y + (s.rect.Height - _font.Height(scale)) / 2;
-            if (s.action >= 13)
-            {
-                SoftBevel(c, s.rect, sel ? new Color(46, 50, 68) : ChunkFill);
-                SoftText(c, s.label, tx, ty, sel ? Color.White : TextDim, 3);
-            }
-            else
-            {
-                SoftText(c, s.label, tx, s.rect.Y + 14, sel ? Color.White : TextDim, 2);
-            }
+            int ty = s.rect.Y + (s.rect.Height - _font.Height(3)) / 2;
+            SoftBevel(c, s.rect, sel ? new Color(46, 50, 68) : ChunkFill);
+            SoftText(c, s.label, tx, s.rect.Y + (s.rect.Height - _font.Height(3)) / 2, sel ? Color.White : TextDim, 3);
         }
-        SoftTextCentered(c, "ARROWS MOVE / SELECT   ESC BACK", frame.Bottom - 44, new Color(90, 96, 112), 2);
+
+        SoftTextCentered(c, "ARROWS SELECT   LEFT/RIGHT ADJUST   ENTER ACTIVATE   ESC BACK", frame.Bottom - 44, new Color(90, 96, 112), 2);
     }
 
     private void ComposeSoftHelp(SoftCanvas c)
@@ -912,7 +916,7 @@ public class Game1 : Game
 
     private void DrawSetup()
     {
-        var frame = new Rectangle(TargetWidth / 2 - 520, 90, 1040, TargetHeight - 210);
+        var frame = SetupFrame;
         BevelPanel(frame, new Color(22, 24, 32), PanelLine, new Color(8, 8, 12));
         FillRect(new Rectangle(frame.X + 4, frame.Y + 4, frame.Width - 8, frame.Height - 8), ChunkFill);
 
@@ -922,37 +926,35 @@ public class Game1 : Game
         var t = Sim.DifficultyTuning(_selDifficulty);
         int cx = TargetWidth / 2;
 
-        _font.Draw(_spriteBatch, "DIFFICULTY", cx - 420, 300, TextCyan, 2);
-        DrawCursor(cx - 250, 296, 2);
-        _font.Draw(_spriteBatch, $"< {DifficultyName(_selDifficulty)} >", cx - 226, 296, Color.White, 2);
-        _font.Draw(_spriteBatch, DifficultyBlurb(_selDifficulty), cx - 226, 332, TextDim);
-        _font.Draw(_spriteBatch, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", cx - 420, 360, TextDim);
+        // Difficulty row
+        _font.Draw(_spriteBatch, "DIFFICULTY", cx - 310, 286, TextCyan, 2);
+        _font.Draw(_spriteBatch, "<", BtnDiffMinus.X + 12, BtnDiffMinus.Y + 8, TextGold, 3);
+        _font.Draw(_spriteBatch, DifficultyName(_selDifficulty), BtnDiffMinus.X + BtnDiffMinus.Width + 16, 292, Color.White, 2);
+        _font.Draw(_spriteBatch, ">", BtnDiffPlus.X + 12, BtnDiffPlus.Y + 8, TextGold, 3);
+        _font.Draw(_spriteBatch, DifficultyBlurb(_selDifficulty), cx - 310, 332, TextDim, 2);
+        _font.Draw(_spriteBatch, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", cx - 310, 360, TextDim, 2);
 
-        _font.Draw(_spriteBatch, "EVENTS", cx - 420, 440, TextCyan, 2);
-        DrawCursor(cx - 250, 436, 2);
-        _font.Draw(_spriteBatch, _selEvents ? "[ ON ]" : "[ OFF ]", cx - 226, 436, _selEvents ? TextGreen : TextDim, 2);
-        _font.Draw(_spriteBatch, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", cx - 226, 472, TextDim);
+        // Events row
+        _font.Draw(_spriteBatch, "EVENTS", cx - 310, 426, TextCyan, 2);
+        var toggleText = _selEvents ? "ON" : "OFF";
+        var toggleX = BtnEvents.X + (BtnEvents.Width - _font.Width(toggleText, 2)) / 2;
+        var toggleY = BtnEvents.Y + (BtnEvents.Height - _font.Height(2)) / 2;
+        BevelPanel(BtnEvents, _selEvents ? new Color(40, 60, 44) : ChunkFill, PanelLine, new Color(8, 8, 12));
+        _font.Draw(_spriteBatch, toggleText, toggleX, toggleY, _selEvents ? TextGreen : TextDim, 2);
+        _font.Draw(_spriteBatch, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", cx - 310, 472, TextDim, 2);
 
-        foreach (var s in _setupRects)
+        // Rows
+        foreach (var s in _setupRows)
         {
-            bool sel = _setupSel >= 0 && _setupRects[_setupSel].action == s.action;
+            bool sel = _setupSel >= 0 && _setupRows[_setupSel].action == s.action;
             int tw = _font.Width(s.label, 3);
             int tx = s.rect.X + (s.rect.Width - tw) / 2;
             int ty = s.rect.Y + (s.rect.Height - _font.Height(3)) / 2;
-            if (s.action >= 13)
-            {
-                BevelPanel(s.rect, sel ? new Color(44, 48, 66) : new Color(30, 32, 42),
-                    sel ? TextGold : new Color(80, 86, 104), new Color(10, 10, 14));
-                if (sel) DrawCursor(s.rect.X - 34, ty, 3);
-                _font.Draw(_spriteBatch, s.label, tx, ty, sel ? Color.White : TextDim, 3);
-            }
-            else
-            {
-                if (sel) DrawCursor(s.rect.X - 30, s.rect.Y + 14, 2);
-                _font.Draw(_spriteBatch, s.label, tx, s.rect.Y + 14, sel ? TextWhiteOrGold() : TextDim, 2);
-            }
+            BevelPanel(s.rect, sel ? new Color(46, 50, 68) : ChunkFill, PanelLine, new Color(8, 8, 12));
+            _font.Draw(_spriteBatch, s.label, tx, s.rect.Y + (s.rect.Height - _font.Height(3)) / 2, sel ? Color.White : TextDim, 3);
         }
-        DrawCentered("ARROWS MOVE / SELECT   ESC BACK", frame.Bottom - 44, new Color(90, 96, 112));
+
+        DrawCentered("ARROWS SELECT   LEFT/RIGHT ADJUST   ENTER ACTIVATE   ESC BACK", frame.Bottom - 44, new Color(90, 96, 112));
     }
 
     private Color TextWhiteOrGold() => Color.White;
