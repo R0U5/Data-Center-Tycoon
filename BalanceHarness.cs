@@ -13,6 +13,9 @@ public static class BalanceHarness
         public float ComfortTarget = 0.9f;
         public bool UseTiers;
         public bool UseParks;
+        public bool UseCooling;
+        public bool UsePower;
+        public bool UseRecycler;
         public bool Sprawl;
     }
 
@@ -25,6 +28,13 @@ public static class BalanceHarness
         new() { Name = "tiered + parks, bold 1.1", ComfortTarget = 1.1f, UseTiers = true, UseParks = true },
         new() { Name = "tiered + parks, overpack 1.3", ComfortTarget = 1.3f, UseTiers = true, UseParks = true },
         new() { Name = "sprawl outside catchments", Sprawl = true },
+    };
+
+    private static readonly Policy[] ExtendedPolicies =
+    {
+        new() { Name = "skilled + cooling + power", ComfortTarget = 0.9f, UseTiers = true, UseParks = true, UseCooling = true, UsePower = true },
+        new() { Name = "cooling+power, no parks", ComfortTarget = 0.9f, UseTiers = true, UseCooling = true, UsePower = true },
+        new() { Name = "recycler economy", ComfortTarget = 0.9f, UseTiers = true, UseParks = true, UseRecycler = true },
     };
 
     public static void Run(string[] args)
@@ -49,29 +59,38 @@ public static class BalanceHarness
         Console.WriteLine($"goal ${Sim.WIN_CASH_GOAL:F0}  growth {Sim.DAILY_DEMAND_GROWTH:P1}/day  nimby {Sim.NIMBY_WEIGHT}x^{Sim.NIMBY_EXP}  comfort {Sim.COMFORT_PER_SIZE}/size");
         Console.WriteLine();
 
+        Console.WriteLine("== VANILLA LADDER (four-structure regression baseline) ==");
         foreach (var policy in Policies)
-        {
-            var outcomes = new List<(string outcome, int day, float peak, float happy)>();
-            for (int s = 0; s < seeds; s++)
-                outcomes.Add(RunOne(new MapGenerator(1000L + s * 7919L), policy));
+            Report(seeds, policy);
 
-            int wins = outcomes.Count(o => o.outcome == "WIN");
-            int revolts = outcomes.Count(o => o.outcome == "REVOLT");
-            int bankrupts = outcomes.Count(o => o.outcome == "BANKRUPT");
-            int timeouts = outcomes.Count(o => o.outcome == "TIMEOUT");
-            var winDays = outcomes.Where(o => o.outcome == "WIN").Select(o => o.day).OrderBy(d => d).ToList();
-            string med = winDays.Count > 0 ? winDays[winDays.Count / 2].ToString() : "-";
-            var endDays = outcomes.Where(o => o.outcome is "REVOLT" or "BANKRUPT").Select(o => o.day).OrderBy(d => d).ToList();
-            string medEnd = endDays.Count > 0 ? endDays[endDays.Count / 2].ToString() : "-";
-            var peaks = outcomes.Select(o => o.peak).OrderBy(p => p).ToList();
-            float medPeak = peaks[peaks.Count / 2];
-
-            Console.WriteLine($"  {policy.Name,-32} WIN {wins,2}/{seeds}  REVOLT {revolts,2}  BANKRUPT {bankrupts,2}  TIMEOUT {timeouts,2}   median win day {med,3}  median fail day {medEnd,3}  median peak value ${medPeak,7:F0}");
-        }
+        Console.WriteLine();
+        Console.WriteLine("== EXTENDED SYSTEMS (power / cooling / recycler) ==");
+        foreach (var policy in ExtendedPolicies)
+            Report(seeds, policy);
 
         Console.WriteLine();
         Console.WriteLine("healthy: naive REVOLTS, sheds-only never WINS, skilled WINS on ~all seeds,");
         Console.WriteLine("         overpack mostly REVOLTS, sprawl goes BANKRUPT.");
+    }
+
+    private static void Report(int seeds, Policy policy)
+    {
+        var outcomes = new List<(string outcome, int day, float peak, float happy)>();
+        for (int s = 0; s < seeds; s++)
+            outcomes.Add(RunOne(new MapGenerator(1000L + s * 7919L), policy));
+
+        int wins = outcomes.Count(o => o.outcome == "WIN");
+        int revolts = outcomes.Count(o => o.outcome == "REVOLT");
+        int bankrupts = outcomes.Count(o => o.outcome == "BANKRUPT");
+        int timeouts = outcomes.Count(o => o.outcome == "TIMEOUT");
+        var winDays = outcomes.Where(o => o.outcome == "WIN").Select(o => o.day).OrderBy(d => d).ToList();
+        string med = winDays.Count > 0 ? winDays[winDays.Count / 2].ToString() : "-";
+        var endDays = outcomes.Where(o => o.outcome is "REVOLT" or "BANKRUPT").Select(o => o.day).OrderBy(d => d).ToList();
+        string medEnd = endDays.Count > 0 ? endDays[endDays.Count / 2].ToString() : "-";
+        var peaks = outcomes.Select(o => o.peak).OrderBy(p => p).ToList();
+        float medPeak = peaks[peaks.Count / 2];
+
+        Console.WriteLine($"  {policy.Name,-32} WIN {wins,2}/{seeds}  REVOLT {revolts,2}  BANKRUPT {bankrupts,2}  TIMEOUT {timeouts,2}   median win day {med,3}  median fail day {medEnd,3}  median peak value ${medPeak,7:F0}");
     }
 
     private const int MaxDays = 120;
@@ -135,9 +154,26 @@ public static class BalanceHarness
         Check(legacy != null && legacy.Map.Seed == 12345 && legacy.Day == 1, "legacy seed save starts fresh");
         var v2 = Sim.Deserialize("v2\nseed=777\nday=9\nmoney=100\n");
         Check(v2 != null && v2.Map.Seed == 777 && v2.Day == 1, "v2 save keeps map, restarts run");
+        var v3 = Sim.Deserialize("v3\nseed=555\nday=9\nmoney=100\n");
+        Check(v3 != null && v3.Map.Seed == 555 && v3.Day == 9, "v3 save upgrades to v4");
 
         bool demolished = sim.DemolishAt(grassX, grassY);
         Check(demolished && sim.Grid[grassX, grassY] == StructureType.None, "demolish clears tile");
+
+        var win = new Sim(new MapGenerator(7)) { };
+        win.TryPlace(win.Map.Towns.Count > 0 ? 0 : 0, 0, StructureType.Shed);
+        var winSim = new Sim(new MapGenerator(7));
+        int wx = -1, wy = -1;
+        for (int x = 0; x < MapGenerator.GridWidth && wx < 0; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+                if (winSim.Map.Tiles[x, y] == TileType.Empty && winSim.Map.CatchmentTown[x, y] >= 0) { wx = x; wy = y; break; }
+        winSim.PlaceRegion(0, 0, MapGenerator.GridWidth - 1, MapGenerator.GridHeight - 1, StructureType.Campus);
+        Check(winSim.State == RunState.Won || winSim.Money >= 0, "mass build does not crash");
+
+        Check(new Sim(new MapGenerator(11)).LocalCooled != null, "local cooling grid allocated");
+        Check(Structures.Get(StructureType.Recycler).GeneratesValue, "recycler generates passive income");
+        Check(Structures.Get(StructureType.PowerPlant).Powers, "power plant produces power");
+        Check(Structures.Get(StructureType.Campus).ConsumesPower, "campus consumes power");
 
         Console.WriteLine(failures == 0 ? "\nALL TESTS PASSED" : $"\n{failures} TEST(S) FAILED");
         Environment.ExitCode = failures == 0 ? 0 : 1;
@@ -152,12 +188,12 @@ public static class BalanceHarness
         while (sim.State == RunState.Playing && sim.Day <= MaxDays)
         {
             StepManager(sim, towns, policy);
-            var counts = new int[5];
+            var counts = new int[Structures.All.Length + 1];
             for (int x = 0; x < MapGenerator.GridWidth; x++)
                 for (int y = 0; y < MapGenerator.GridHeight; y++)
                     counts[(int)sim.Grid[x, y]]++;
             var (d, s) = sim.DemandServed();
-            Console.WriteLine($"d{sim.Day,3} money {sim.Money,7:F0} worth {sim.NetWorth,7:F0} happy {sim.Happiness,5:F1} dem {d,5:F0} srv {s,5:F0} shed {counts[1],3} hall {counts[2],3} camp {counts[3],3} park {counts[4],3} ratios {string.Join(" ", Enumerable.Range(0, map.Towns.Count).Select(i => sim.TownLoadRatio(i).ToString("F2")))}");
+            Console.WriteLine($"d{sim.Day,3} money {sim.Money,7:F0} worth {sim.NetWorth,7:F0} happy {sim.Happiness,5:F1} dem {d,5:F0} srv {s,5:F0} shed {counts[1],3} hall {counts[2],3} camp {counts[3],3} park {counts[4],3} pwr {sim.PowerProduced,4:F0}/{sim.PowerDemanded,4:F0} ratios {string.Join(" ", Enumerable.Range(0, map.Towns.Count).Select(i => sim.TownLoadRatio(i).ToString("F2")))}");
             sim.AdvanceDay();
         }
         Console.WriteLine($"end: {sim.State} {sim.EndReason}");
@@ -193,6 +229,7 @@ public static class BalanceHarness
         public List<(int x, int y)> DcOrder = new();
         public List<(int x, int y)> ParkOrder = new();
         public List<(int x, int y)> ForestCells = new();
+        public List<(int x, int y)> CoolOrder = new();
     }
 
     private static List<TownPlan> BuildTownPlans(MapGenerator map)
@@ -210,14 +247,16 @@ public static class BalanceHarness
         {
             p.DcOrder = p.DcOrder.OrderByDescending(c => map.Cooled[c.x, c.y]).ToList();
             p.ParkOrder = Enumerable.Reverse(p.DcOrder).ToList();
+            p.CoolOrder = p.DcOrder.Where(c => !map.Cooled[c.x, c.y]).ToList();
         }
         return plans;
     }
 
-    private static readonly StructureDef[] TierLadder = { Structures.Shed, Structures.Hall, Structures.Campus };
-
     private static void StepManager(Sim sim, List<TownPlan> towns, Policy policy)
     {
+        if (policy.UsePower) EnsurePower(sim, towns);
+        if (policy.UseRecycler) EnsureRecycler(sim, towns);
+
         foreach (var plan in towns)
         {
             float demand = sim.DemandForTown(plan.Id);
@@ -234,13 +273,16 @@ public static class BalanceHarness
             var tier = Structures.Shed;
             if (policy.UseTiers)
             {
-                foreach (var t in TierLadder)
+                foreach (var t in Structures.TierLadder)
                 {
                     tier = t;
                     float cap = policy.ComfortTarget * (baseComfort + Structures.Park.ComfortAdd * parksBuilt) / t.NimbyLoad * t.Compute;
                     if (cap >= demand) break;
                 }
             }
+
+            if (policy.UseCooling && tier == Structures.Campus)
+                EnsureCooling(sim, plan, demand);
 
             int grass = plan.DcOrder.Count;
             int parksWant = parksBuilt;
@@ -269,6 +311,48 @@ public static class BalanceHarness
         }
     }
 
+    private static void EnsurePower(Sim sim, List<TownPlan> towns)
+    {
+        if (sim.PowerMargin > 4f) return;
+        foreach (var plan in towns)
+            foreach (var c in plan.CoolOrder)
+            {
+                if (sim.Grid[c.x, c.y] != StructureType.None) continue;
+                if (sim.TryPlace(c.x, c.y, StructureType.PowerPlant)) return;
+            }
+    }
+
+    private static void EnsureRecycler(Sim sim, List<TownPlan> towns)
+    {
+        int recyclers = 0;
+        for (int x = 0; x < MapGenerator.GridWidth; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+                if (sim.Grid[x, y] == StructureType.Recycler) recyclers++;
+        if (recyclers >= 2) return;
+        foreach (var plan in towns)
+            foreach (var c in plan.ParkOrder)
+            {
+                if (sim.Grid[c.x, c.y] != StructureType.None) continue;
+                if (sim.TryPlace(c.x, c.y, StructureType.Recycler)) return;
+                return;
+            }
+    }
+
+    private static void EnsureCooling(Sim sim, TownPlan plan, float demand)
+    {
+        int towers = 0;
+        for (int x = 0; x < MapGenerator.GridWidth; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+                if (sim.Grid[x, y] == StructureType.CoolingTower) towers++;
+        if (towers >= 3) return;
+        foreach (var c in plan.CoolOrder)
+        {
+            if (sim.Grid[c.x, c.y] != StructureType.None) continue;
+            if (sim.CanPlaceAt(c.x, c.y, StructureType.CoolingTower) && sim.TryPlace(c.x, c.y, StructureType.CoolingTower))
+                return;
+        }
+    }
+
     private static void BuildParks(Sim sim, TownPlan plan, int parksWant)
     {
         foreach (var c in plan.ParkOrder.Take(parksWant))
@@ -287,6 +371,9 @@ public static class BalanceHarness
         return n;
     }
 
+    private static bool IsInfrastructure(StructureType s)
+        => s == StructureType.PowerPlant || s == StructureType.CoolingTower || s == StructureType.Recycler;
+
     private static void ApplyTown(Sim sim, TownPlan plan, StructureDef tier, int dcWant, int parksWant, bool useForest)
     {
         var parkSet = new HashSet<(int, int)>(plan.ParkOrder.Take(parksWant));
@@ -295,6 +382,7 @@ public static class BalanceHarness
         {
             if (dcCells.Count >= dcWant) break;
             if (parkSet.Contains(c)) continue;
+            if (IsInfrastructure(sim.Grid[c.x, c.y])) continue;
             dcCells.Add(c);
         }
         if (useForest && dcCells.Count < dcWant)
@@ -309,6 +397,7 @@ public static class BalanceHarness
         {
             var s = sim.Grid[c.x, c.y];
             if (s == StructureType.None) continue;
+            if (IsInfrastructure(s)) continue;
             bool keepAsDc = dcSet.Contains(c);
             bool keepAsPark = parkSet.Contains(c) && s == StructureType.Park;
             if (keepAsPark) continue;

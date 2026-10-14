@@ -10,22 +10,22 @@ namespace DataCenterTycoon;
 
 public class Game1 : Game
 {
-    private const int WindowWidth = 1920;
-    private const int WindowHeight = 1080;
+    private const int TargetWidth = 1920;
+    private const int TargetHeight = 1080;
     private const int Ts = MapGenerator.TileSize;
     private const int MapW = MapGenerator.GridWidth * Ts;
     private const int MapH = MapGenerator.GridHeight * Ts;
     private const int SideX = MapW;
-    private const int SideW = WindowWidth - MapW;
-    private const int BottomY = MapH;
-    private const int BottomH = WindowHeight - MapH;
+    private const int SideW = TargetWidth - MapW;
 
     private static readonly string SaveFileName = Path.Combine(AppContext.BaseDirectory, "save.dat");
+    private static readonly string SettingsFileName = Path.Combine(AppContext.BaseDirectory, "settings.dat");
     private static readonly CultureInfo Usd = CultureInfo.GetCultureInfo("en-US");
 
     private static readonly Color BgColor = new(24, 26, 34);
     private static readonly Color PanelColor = new(16, 18, 24);
     private static readonly Color PanelLine = new(70, 76, 96);
+    private static readonly Color ChunkFill = new(28, 30, 40);
     private static readonly Color TextDim = new(150, 156, 172);
     private static readonly Color TextGold = new(250, 208, 80);
     private static readonly Color TextGreen = new(110, 230, 130);
@@ -43,7 +43,8 @@ public class Game1 : Game
         "BRIARLEY", "FOXGLEN", "MAPLETON", "STONEBROOK", "WILLOWBY"
     };
 
-    private enum Tool { Shed, Hall, Campus, Park, Raze }
+    private enum Tool { Shed, Hall, Campus, Park, Cooling, Power, Recycler, Raze }
+    private enum Screen { Menu, Playing, Ended }
 
     private static readonly (Tool tool, StructureType type, Sprite icon, string key)[] ToolDefs =
     {
@@ -51,17 +52,26 @@ public class Game1 : Game
         (Tool.Hall, StructureType.Hall, Sprite.HallA, "2"),
         (Tool.Campus, StructureType.Campus, Sprite.CampusA, "3"),
         (Tool.Park, StructureType.Park, Sprite.Park, "4"),
-        (Tool.Raze, StructureType.None, Sprite.Raze, "5"),
+        (Tool.Cooling, StructureType.CoolingTower, Sprite.Cooling, "5"),
+        (Tool.Power, StructureType.PowerPlant, Sprite.Power, "6"),
+        (Tool.Recycler, StructureType.Recycler, Sprite.Recycler, "7"),
+        (Tool.Raze, StructureType.None, Sprite.Raze, "X"),
     };
 
+    private readonly record struct UndoStep(int x0, int y0, int x1, int y1, StructureType type, bool wasBuild);
+    private readonly record struct MenuButton(string label, Rectangle rect, int action);
+
     private readonly GraphicsDeviceManager _graphics;
+    private RenderTarget2D _scene;
     private SpriteBatch _spriteBatch;
     private Texture2D _pixel;
     private PixelFont _font;
     private PixelArt _art;
     private Sfx _sfx;
+    private Music _music;
 
     private Sim _sim;
+    private Screen _screen = Screen.Menu;
     private Tool _tool = Tool.Shed;
     private Point _dragStart;
     private bool _dragging;
@@ -70,25 +80,41 @@ public class Game1 : Game
     private float _animTime;
     private bool _showHelp;
     private bool _warned;
+    private bool _soundOn = true;
     private readonly List<(string text, Color color, float expires)> _toasts = new();
+    private readonly Stack<UndoStep> _undo = new();
     private float _clock;
+    private int _hover = -1;
+    private string _tickerText = "";
+    private float _tickerUntil;
+
+    private bool _tutorialSeen;
+    public bool TutorialJustSeen => _tutorialSeen;
+    private int _hoverTooltip = -1;
 
     private readonly string _shotPath;
     private readonly int _shotDays;
     private readonly long? _shotSeed;
     private int _frameCount;
 
+    private MenuButton[] _menuButtons = Array.Empty<MenuButton>();
+
     public Game1(string shotPath = null, long? shotSeed = null, int shotDays = 0)
     {
         _shotPath = shotPath;
         _shotSeed = shotSeed;
         _shotDays = shotDays;
-        _graphics = new GraphicsDeviceManager(this);
-        _graphics.PreferredBackBufferWidth = WindowWidth;
-        _graphics.PreferredBackBufferHeight = WindowHeight;
+        _graphics = new GraphicsDeviceManager(this)
+        {
+            PreferredBackBufferWidth = TargetWidth,
+            PreferredBackBufferHeight = TargetHeight,
+            SynchronizeWithVerticalRetrace = true
+        };
         Content.RootDirectory = "Content";
         IsMouseVisible = true;
+        Window.AllowUserResizing = true;
         Window.Title = "DATA TYCOON";
+        IsFixedTimeStep = false;
     }
 
     protected override void Initialize()
@@ -96,12 +122,15 @@ public class Game1 : Game
         if (_shotPath != null)
         {
             _sim = new Sim(new MapGenerator(_shotSeed ?? 1000L));
+            _screen = Screen.Playing;
             if (_shotDays < 0) _showHelp = true;
             else BalanceHarness.PlayDays(_sim, _shotDays);
         }
-        else if (!LoadGame())
+        else
         {
-            StartNewGame();
+            LoadSettings();
+            _sim = new Sim(new MapGenerator(Environment.TickCount64));
+            _screen = Screen.Menu;
         }
         base.Initialize();
     }
@@ -109,11 +138,39 @@ public class Game1 : Game
     protected override void LoadContent()
     {
         _spriteBatch = new SpriteBatch(GraphicsDevice);
+        _scene = new RenderTarget2D(GraphicsDevice, TargetWidth, TargetHeight);
         _pixel = new Texture2D(GraphicsDevice, 1, 1);
         _pixel.SetData(new[] { Color.White });
         _font = new PixelFont(GraphicsDevice);
         _art = new PixelArt(GraphicsDevice);
         _sfx = new Sfx();
+        _music = new Music();
+        ApplySoundState();
+        BuildMenuButtons();
+    }
+
+    private void BuildMenuButtons()
+    {
+        int w = 440, h = 56, cx = TargetWidth / 2 - w / 2;
+        int y = TargetHeight / 2 - 70;
+        var list = new List<MenuButton>();
+        if (File.Exists(SaveFileName))
+        {
+            list.Add(new MenuButton("CONTINUE", new Rectangle(cx, y, w, h), 0));
+            y += h + 18;
+        }
+        list.Add(new MenuButton("NEW GAME", new Rectangle(cx, y, w, h), 1));
+        y += h + 18;
+        list.Add(new MenuButton(_soundOn ? "SOUND: ON" : "SOUND: OFF", new Rectangle(cx, y, w, h), 2));
+        y += h + 18;
+        list.Add(new MenuButton("QUIT", new Rectangle(cx, y, w, h), 3));
+        _menuButtons = list.ToArray();
+    }
+
+    private void ApplySoundState()
+    {
+        _sfx.Muted = !_soundOn;
+        _music.Muted = !_soundOn;
     }
 
     private void StartNewGame()
@@ -121,7 +178,20 @@ public class Game1 : Game
         _sim = new Sim(new MapGenerator(Environment.TickCount64));
         _warned = false;
         _toasts.Clear();
+        _undo.Clear();
+        _tutorialSeen = false;
+        _screen = Screen.Playing;
         SaveGame();
+    }
+
+    private void ContinueGame()
+    {
+        if (LoadGame() && _sim != null)
+        {
+            _tutorialSeen = true;
+            _screen = _sim.State == RunState.Playing ? Screen.Playing : Screen.Ended;
+        }
+        else StartNewGame();
     }
 
     private void RetryMap()
@@ -129,34 +199,59 @@ public class Game1 : Game
         _sim = new Sim(new MapGenerator(_sim.Map.Seed));
         _warned = false;
         _toasts.Clear();
+        _undo.Clear();
+        _tutorialSeen = true;
+        _screen = Screen.Playing;
         SaveGame();
     }
 
     protected override void Update(GameTime gameTime)
     {
-        float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+        float dt = Math.Min((float)gameTime.ElapsedGameTime.TotalSeconds, 0.05f);
         _animTime += dt;
         _clock += dt;
         _toasts.RemoveAll(t => t.expires < _clock);
 
         var mouse = Mouse.GetState();
         var keyboard = Keyboard.GetState();
+        var v = ToVirtual(mouse);
 
-        if (Pressed(keyboard, Keys.Escape)) Exit();
-        if (Pressed(keyboard, Keys.N)) { StartNewGame(); Toast("NEW REGION", TextCyan); }
-        if (Pressed(keyboard, Keys.R)) { RetryMap(); Toast("REGION RESET", TextCyan); }
-        if (Pressed(keyboard, Keys.M)) { _sfx.Muted = !_sfx.Muted; Toast(_sfx.Muted ? "SOUND OFF" : "SOUND ON", TextDim); }
-        if (Pressed(keyboard, Keys.H)) _showHelp = !_showHelp;
+        if (_screen == Screen.Menu)
+        {
+            UpdateMenu(v, mouse, keyboard);
+            _prevMouse = mouse;
+            _prevKeyboard = keyboard;
+            base.Update(gameTime);
+            return;
+        }
 
-        if (_sim.State == RunState.Playing && !_showHelp)
+        if (Pressed(keyboard, Keys.Escape))
+        {
+            if (_showHelp) _showHelp = false;
+            else { _screen = Screen.Menu; BuildMenuButtons(); }
+        }
+        if (Pressed(keyboard, Keys.H) && _screen == Screen.Playing) _showHelp = !_showHelp;
+        if (Pressed(keyboard, Keys.M)) { _soundOn = !_soundOn; ApplySoundState(); SaveSettings(); Toast(_soundOn ? "SOUND ON" : "SOUND OFF", TextDim); }
+
+        if (_screen == Screen.Ended)
+        {
+            if (Pressed(keyboard, Keys.R)) RetryMap();
+            if (Pressed(keyboard, Keys.N)) StartNewGame();
+        }
+
+        if (_sim.State == RunState.Playing && _screen == Screen.Playing && !_showHelp)
         {
             if (Pressed(keyboard, Keys.D1)) SelectTool(Tool.Shed);
             if (Pressed(keyboard, Keys.D2)) SelectTool(Tool.Hall);
             if (Pressed(keyboard, Keys.D3)) SelectTool(Tool.Campus);
             if (Pressed(keyboard, Keys.D4)) SelectTool(Tool.Park);
-            if (Pressed(keyboard, Keys.D5) || Pressed(keyboard, Keys.X)) SelectTool(Tool.Raze);
+            if (Pressed(keyboard, Keys.D5)) SelectTool(Tool.Cooling);
+            if (Pressed(keyboard, Keys.D6)) SelectTool(Tool.Power);
+            if (Pressed(keyboard, Keys.D7)) SelectTool(Tool.Recycler);
+            if (Pressed(keyboard, Keys.X)) SelectTool(Tool.Raze);
             if (Pressed(keyboard, Keys.Space)) AdvanceDay();
-            HandleMouse(mouse);
+            if (Pressed(keyboard, Keys.Z)) Undo();
+            HandleMouse(v, mouse);
         }
 
         _prevMouse = mouse;
@@ -164,8 +259,34 @@ public class Game1 : Game
         base.Update(gameTime);
     }
 
-    private bool Pressed(KeyboardState kb, Keys key)
-        => kb.IsKeyDown(key) && !_prevKeyboard.IsKeyDown(key);
+    private void UpdateMenu(Point v, MouseState raw, KeyboardState keyboard)
+    {
+        _hover = -1;
+        for (int i = 0; i < _menuButtons.Length; i++)
+            if (_menuButtons[i].rect.Contains(v.X, v.Y)) _hover = i;
+
+        bool click = raw.LeftButton == ButtonState.Pressed && _prevMouse.LeftButton == ButtonState.Released;
+        if (click && _hover >= 0)
+        {
+            _sfx.Play(Sound.Select, 0.4f);
+            DoMenuAction(_menuButtons[_hover].action);
+        }
+        else if (Pressed(keyboard, Keys.Enter)) DoMenuAction(File.Exists(SaveFileName) ? 0 : 1);
+    }
+
+    private void DoMenuAction(int action)
+    {
+        switch (action)
+        {
+            case 0: ContinueGame(); break;
+            case 1: StartNewGame(); break;
+            case 2: _soundOn = !_soundOn; ApplySoundState(); SaveSettings(); BuildMenuButtons(); break;
+            case 3: Exit(); break;
+        }
+        _tutorialSeen = true;
+    }
+
+    private bool Pressed(KeyboardState kb, Keys key) => kb.IsKeyDown(key) && !_prevKeyboard.IsKeyDown(key);
 
     private void SelectTool(Tool tool)
     {
@@ -173,43 +294,48 @@ public class Game1 : Game
         _sfx.Play(Sound.Select, 0.35f);
     }
 
-    private void HandleMouse(MouseState mouse)
+    private void Undo()
     {
-        bool leftPressed = mouse.LeftButton == ButtonState.Pressed && _prevMouse.LeftButton == ButtonState.Released;
-        bool leftReleased = mouse.LeftButton == ButtonState.Released && _prevMouse.LeftButton == ButtonState.Pressed;
-        bool rightPressed = mouse.RightButton == ButtonState.Pressed && _prevMouse.RightButton == ButtonState.Released;
+        if (_undo.Count == 0) { Toast("NOTHING TO UNDO", TextDim); return; }
+        var step = _undo.Pop();
+        if (step.wasBuild)
+        {
+            _sim.DemolishRegion(step.x0, step.y0, step.x1, step.y1);
+            Toast("UNDID BUILD", TextCyan);
+        }
+        else
+        {
+            _sim.PlaceRegion(step.x0, step.y0, step.x1, step.y1, step.type);
+            Toast("UNDID RAZE", TextCyan);
+        }
+        SaveGame();
+    }
+
+    private void HandleMouse(Point mouse, MouseState raw)
+    {
+        bool leftPressed = raw.LeftButton == ButtonState.Pressed && _prevMouse.LeftButton == ButtonState.Released;
+        bool leftReleased = raw.LeftButton == ButtonState.Released && _prevMouse.LeftButton == ButtonState.Pressed;
+        bool rightPressed = raw.RightButton == ButtonState.Pressed && _prevMouse.RightButton == ButtonState.Released;
 
         if (leftPressed && mouse.X >= SideX)
         {
             foreach (var (tool, _, _, _) in ToolDefs)
-                if (ToolButtonRect(tool).Contains(mouse.X, mouse.Y))
-                {
-                    SelectTool(tool);
-                    return;
-                }
+                if (ToolButtonRect(tool).Contains(mouse.X, mouse.Y)) { SelectTool(tool); return; }
             return;
         }
 
-        if (leftPressed && InMap(mouse))
-        {
-            _dragStart = TileAt(mouse);
-            _dragging = true;
-        }
+        if (leftPressed && InMap(mouse)) { _dragStart = TileAt(mouse); _dragging = true; }
 
-        if (leftReleased && _dragging)
-        {
-            _dragging = false;
-            var end = TileAt(mouse);
-            ApplyTool(_dragStart, end);
-        }
+        if (leftReleased && _dragging) { _dragging = false; ApplyTool(_dragStart, TileAt(mouse)); }
 
         if (rightPressed && InMap(mouse))
         {
             var p = TileAt(mouse);
-            if (_sim.DemolishAt(p.X, p.Y))
+            var s = _sim.Grid[p.X, p.Y];
+            if (s != StructureType.None)
             {
-                _sfx.Play(Sound.Demolish);
-                SaveGame();
+                _undo.Push(new UndoStep(p.X, p.Y, p.X, p.Y, s, false));
+                if (_sim.DemolishAt(p.X, p.Y)) { _sfx.Play(Sound.Demolish); SaveGame(); }
             }
         }
     }
@@ -218,94 +344,151 @@ public class Game1 : Game
     {
         if (_tool == Tool.Raze)
         {
+            var snapshot = new List<(int x, int y, StructureType s)>();
+            for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
+                for (int y = Math.Min(a.Y, b.Y); y <= Math.Max(a.Y, b.Y); y++)
+                    if (_sim.Grid[x, y] != StructureType.None) snapshot.Add((x, y, _sim.Grid[x, y]));
             int removed = _sim.DemolishRegion(a.X, a.Y, b.X, b.Y);
             if (removed > 0)
             {
+                if (snapshot.Count == 1)
+                    _undo.Push(new UndoStep(snapshot[0].x, snapshot[0].y, snapshot[0].x, snapshot[0].y, snapshot[0].s, false));
                 _sfx.Play(Sound.Demolish);
                 Toast($"RAZED {removed} TILES", TextOrange);
                 SaveGame();
             }
+            else _sfx.Play(Sound.Deny, 0.35f);
             return;
         }
 
         var type = ToolDefs[(int)_tool].type;
         var (tiles, cost) = _sim.RegionPlan(a.X, a.Y, b.X, b.Y, type);
-        if (tiles == 0)
-        {
-            _sfx.Play(Sound.Deny, 0.35f);
-            return;
-        }
-        if (_sim.Money < cost)
-        {
-            _sfx.Play(Sound.Deny, 0.35f);
-            Toast("NOT ENOUGH CASH", TextRed);
-            return;
-        }
+        if (tiles == 0) { _sfx.Play(Sound.Deny, 0.35f); Toast(CantPlaceReason(a.X, a.Y, type), TextRed); return; }
+        if (_sim.Money < cost) { _sfx.Play(Sound.Deny, 0.35f); Toast("NOT ENOUGH CASH", TextRed); return; }
+
         _sim.PlaceRegion(a.X, a.Y, b.X, b.Y, type);
+        _undo.Push(new UndoStep(a.X, a.Y, b.X, b.Y, type, true));
         _sfx.Play(Sound.Build);
         Toast($"BUILT {tiles} FOR {Money(cost)}", TextGreen);
         SaveGame();
+    }
+
+    private string CantPlaceReason(int x, int y, StructureType type)
+    {
+        if (x < 0 || y < 0 || x >= MapGenerator.GridWidth || y >= MapGenerator.GridHeight) return "OFF MAP";
+        var t = _sim.Map.Tiles[x, y];
+        if (t == TileType.River) return "CANNOT BUILD ON RIVER";
+        if (t == TileType.Town) return "CANNOT BUILD ON TOWN";
+        if (_sim.Grid[x, y] == type) return "ALREADY BUILT";
+        if (_sim.Grid[x, y] != StructureType.None) return "UPGRADE ONLY TO HIGHER TIER";
+        return "CANNOT BUILD HERE";
     }
 
     private void AdvanceDay()
     {
         _sim.AdvanceDay();
         _sfx.Play(Sound.Day, 0.4f);
+        string sign = _sim.LastNet >= 0 ? "+" : "";
+        _tickerText = $"DAY {_sim.Day}   REVENUE {Money(_sim.LastRevenue)}   UPKEEP {Money(-_sim.LastOpCost)}   NET {sign}{Money(_sim.LastNet)}";
+        _tickerUntil = _clock + 3.4f;
 
-        if (_sim.State == RunState.Won) _sfx.Play(Sound.Win, 0.7f);
-        else if (_sim.State == RunState.Lost) _sfx.Play(Sound.Lose, 0.7f);
+        if (_sim.State == RunState.Won) { _sfx.Play(Sound.Win, 0.7f); _screen = Screen.Ended; }
+        else if (_sim.State == RunState.Lost) { _sfx.Play(Sound.Lose, 0.7f); _screen = Screen.Ended; }
         else if (_sim.Happiness < Sim.HAPPINESS_WARN && !_warned)
         {
             _warned = true;
             _sfx.Play(Sound.Warn, 0.6f);
             Toast("THE TOWNS ARE TURNING ON YOU", TextRed);
         }
-        else if (_sim.Happiness >= Sim.HAPPINESS_WARN + 8f)
-        {
-            _warned = false;
-        }
+        else if (_sim.Happiness >= Sim.HAPPINESS_WARN + 8f) _warned = false;
+
         SaveGame();
     }
 
     private void Toast(string text, Color color)
     {
+        if (_toasts.Count > 0 && _toasts[^1].text == text) { _toasts[^1] = (text, color, _clock + 3.5f); return; }
         _toasts.Add((text, color, _clock + 3.5f));
-        if (_toasts.Count > 3) _toasts.RemoveAt(0);
+        if (_toasts.Count > 4) _toasts.RemoveAt(0);
     }
 
-    private static bool InMap(MouseState m) => m.X >= 0 && m.X < MapW && m.Y >= 0 && m.Y < MapH;
+    private static bool InMap(Point m) => m.X >= 0 && m.X < MapW && m.Y >= 0 && m.Y < MapH;
 
-    private static Point TileAt(MouseState m)
+    private static Point TileAt(Point m)
         => new(Math.Clamp(m.X / Ts, 0, MapGenerator.GridWidth - 1), Math.Clamp(m.Y / Ts, 0, MapGenerator.GridHeight - 1));
 
-    private static string Money(float v) => v.ToString("C0", Usd);
+    private Point ToVirtual(MouseState m)
+    {
+        var vp = GraphicsDevice.Viewport;
+        if (vp.Width <= 0 || vp.Height <= 0) return new Point(m.X, m.Y);
+        return new Point(m.X * TargetWidth / vp.Width, m.Y * TargetHeight / vp.Height);
+    }
 
-    private static string ShortMoney(float v)
-        => Math.Abs(v) >= 10000f ? $"${v / 1000f:F1}K" : v.ToString("C0", Usd);
+    private static string Money(float v) => v.ToString("C0", Usd);
+    private static string ShortMoney(float v) => Math.Abs(v) >= 10000f ? $"${v / 1000f:F1}K" : v.ToString("C0", Usd);
 
     protected override void Draw(GameTime gameTime)
     {
+        GraphicsDevice.SetRenderTarget(_scene);
         GraphicsDevice.Clear(BgColor);
         _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
 
-        DrawMap();
-        DrawDragPreview();
-        DrawTownLabels();
-        DrawSidebar();
-        DrawBottomBar();
-        DrawToasts();
-        if (_showHelp) DrawHelp();
-        if (_sim.State != RunState.Playing) DrawEndScreen();
+        if (_screen == Screen.Menu) DrawMenu();
+        else
+        {
+            var v = ToVirtual(Mouse.GetState());
+            UpdateHover(v);
+            DrawMap();
+            DrawDragPreview();
+            DrawTownLabels();
+            DrawSidebar();
+            DrawBottomBar(v);
+            DrawToasts();
+            DrawTicker();
+            DrawTooltip(v);
+            if (_showHelp) DrawHelp();
+            if (_screen == Screen.Ended) DrawEndScreen();
+        }
 
         _spriteBatch.End();
+        GraphicsDevice.SetRenderTarget(null);
+
+        _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
+        DrawSceneScaled();
+        _spriteBatch.End();
+
         base.Draw(gameTime);
 
         _frameCount++;
-        if (_shotPath != null && _frameCount >= 3)
+        if (_shotPath != null && _frameCount >= 3) { SaveScreenshot(); Exit(); }
+    }
+
+    private void DrawSceneScaled()
+    {
+        var vp = GraphicsDevice.Viewport;
+        GraphicsDevice.Clear(Color.Black);
+        float scale = Math.Min(vp.Width / (float)TargetWidth, vp.Height / (float)TargetHeight);
+        int w = (int)(TargetWidth * scale);
+        int h = (int)(TargetHeight * scale);
+        _spriteBatch.Draw(_scene, new Rectangle((vp.Width - w) / 2, (vp.Height - h) / 2, w, h), Color.White);
+    }
+
+    private void DrawMenu()
+    {
+        _font.Draw(_spriteBatch, "DATA", TargetWidth / 2 - 190, 180, TextGold, 10);
+        _font.Draw(_spriteBatch, "TYCOON", TargetWidth / 2 - 130, 290, TextCyan, 10);
+        DrawCentered("AN 8-BIT COMPUTE EMPIRE", 420, TextDim);
+
+        for (int i = 0; i < _menuButtons.Length; i++)
         {
-            SaveScreenshot();
-            Exit();
+            var b = _menuButtons[i];
+            bool hover = _hover == i;
+            FillRect(b.rect, hover ? new Color(44, 48, 66) : ChunkFill);
+            OutlineRect(b.rect, hover ? TextGold : PanelLine);
+            int tw = _font.Width(b.label, 3);
+            _font.Draw(_spriteBatch, b.label, b.rect.X + (b.rect.Width - tw) / 2, b.rect.Y + 16, hover ? Color.White : TextDim, 3);
         }
+        DrawCentered("CLICK A BUTTON OR PRESS ENTER", TargetHeight - 150, TextDim);
     }
 
     private int AnimFrame => (int)(_animTime * 2f) % 2;
@@ -322,16 +505,11 @@ public class Game1 : Game
                 var structure = _sim.Grid[x, y];
 
                 Sprite baseSprite;
-                if (tile == TileType.River)
-                    baseSprite = frame == 0 ? Sprite.WaterA : Sprite.WaterB;
-                else if (structure != StructureType.None)
-                    baseSprite = StructureSprite(structure, frame, x, y);
-                else if (tile == TileType.Forest)
-                    baseSprite = Sprite.Tree;
-                else if (tile == TileType.Town)
-                    baseSprite = (x + y) % 2 == 0 ? Sprite.HouseA : Sprite.HouseB;
-                else
-                    baseSprite = (x * 7 + y * 13) % 3 == 0 ? Sprite.GrassB : Sprite.GrassA;
+                if (tile == TileType.River) baseSprite = frame == 0 ? Sprite.WaterA : Sprite.WaterB;
+                else if (structure != StructureType.None) baseSprite = StructureSprite(structure, frame, x, y);
+                else if (tile == TileType.Forest) baseSprite = Sprite.Tree;
+                else if (tile == TileType.Town) baseSprite = (x + y) % 2 == 0 ? Sprite.HouseA : Sprite.HouseB;
+                else baseSprite = (x * 7 + y * 13) % 3 == 0 ? Sprite.GrassB : Sprite.GrassA;
 
                 Color tint = Color.White;
                 if (tile == TileType.Town)
@@ -345,9 +523,8 @@ public class Game1 : Game
                 if (tile != TileType.River && tile != TileType.Town)
                 {
                     int t = map.CatchmentTown[x, y];
-                    if (t >= 0)
-                        FillRect(dest, TownTints[t % TownTints.Length] * 0.10f);
-                    if (map.Cooled[x, y])
+                    if (t >= 0) FillRect(dest, TownTints[t % TownTints.Length] * 0.10f);
+                    if (map.Cooled[x, y] || _sim.LocalCooled[x, y])
                     {
                         FillRect(dest, CoolTint * 0.13f);
                         FillRect(new Rectangle(dest.X, dest.Y, 6, 2), CoolTint * 0.8f);
@@ -366,6 +543,9 @@ public class Game1 : Game
             StructureType.Shed => Sprite.Shed,
             StructureType.Hall => f == 0 ? Sprite.HallA : Sprite.HallB,
             StructureType.Campus => f == 0 ? Sprite.CampusA : Sprite.CampusB,
+            StructureType.CoolingTower => Sprite.Cooling,
+            StructureType.PowerPlant => Sprite.Power,
+            StructureType.Recycler => Sprite.Recycler,
             _ => Sprite.Park
         };
     }
@@ -373,7 +553,7 @@ public class Game1 : Game
     private void DrawDragPreview()
     {
         if (_sim.State != RunState.Playing || _showHelp) return;
-        var mouse = Mouse.GetState();
+        var mouse = ToVirtual(Mouse.GetState());
         if (!_dragging && !InMap(mouse)) return;
 
         var a = _dragging ? _dragStart : TileAt(mouse);
@@ -413,14 +593,7 @@ public class Game1 : Game
         }
     }
 
-    private static string ToolName(Tool t) => t switch
-    {
-        Tool.Shed => "SHED",
-        Tool.Hall => "HALL",
-        Tool.Campus => "HYPR",
-        Tool.Park => "PARK",
-        _ => "RAZE"
-    };
+    private static string ToolName(Tool t) => Structures.Display(ToolDefs[(int)t].type);
 
     private void DrawTownLabels()
     {
@@ -441,158 +614,185 @@ public class Game1 : Game
             int ly = Math.Max(4, cy - 64);
             DrawLabel(name, lx, ly, Color.White);
 
-            var srvBar = new Rectangle(Math.Clamp(cx - 40, 4, MapW - 84), ly + 18, 80, 7);
+            var srvBar = new Rectangle(Math.Clamp(cx - 44, 4, MapW - 92), ly + 18, 80, 7);
             Color srvColor = frac >= 0.99f ? TextGreen : (frac >= 0.6f ? TextGold : TextOrange);
             DrawBar(srvBar, frac, srvColor);
+            DrawMoodGlyph(new Rectangle(srvBar.Right + 4, srvBar.Y, 8, 8), frac >= 0.99f);
 
-            var moodBar = new Rectangle(srvBar.X, srvBar.Y + 9, 80, 7);
-            Color moodColor = ratio <= 0.85f ? TextCyan : (ratio <= 1.05f ? TextGold : TextRed);
-            DrawBar(moodBar, Math.Min(1f, ratio), moodColor);
+            var moodBar = new Rectangle(srvBar.X, srvBar.Y + 10, 80, 7);
+            DrawBar(moodBar, Math.Min(1f, ratio), MoodColor(ratio));
+            DrawMoodGlyph(new Rectangle(moodBar.Right + 4, moodBar.Y, 8, 8), ratio <= 0.85f);
+        }
+    }
+
+    private void DrawMoodGlyph(Rectangle r, bool good)
+    {
+        if (good)
+        {
+            FillRect(new Rectangle(r.X, r.Y + 2, r.Width, 2), TextGreen);
+            FillRect(new Rectangle(r.X + 2, r.Y, r.Width - 4, 2), TextGreen);
+        }
+        else
+        {
+            FillRect(new Rectangle(r.X, r.Y, 2, r.Height), TextRed);
+            FillRect(new Rectangle(r.X + r.Width - 2, r.Y, 2, r.Height), TextRed);
         }
     }
 
     private string TownName(int id)
-        => TownNames[(int)((Math.Abs(_sim.Map.Seed) + id * 3 + id) % TownNames.Length)];
+    {
+        int idx = (int)((Math.Abs(_sim.Map.Seed) / 7919 + id * 7) % TownNames.Length);
+        if (idx < 0) idx = 0;
+        return TownNames[idx];
+    }
 
     private Rectangle ToolButtonRect(Tool tool)
-        => new(SideX + 8, 386 + (int)tool * 48, SideW - 16, 44);
+        => new(SideX + 8, 376 + (int)tool * 40, SideW - 16, 38);
+
+    private Rectangle ToolHoverRect(Tool tool) => ToolButtonRect(tool);
+
+    private void UpdateHover(Point v)
+    {
+        _hoverTooltip = -1;
+        for (int i = 0; i < ToolDefs.Length; i++)
+            if (ToolHoverRect(ToolDefs[i].tool).Contains(v.X, v.Y)) _hoverTooltip = i;
+
+        if (v.X < SideX)
+        {
+            if (v.Y < 260) _hoverTooltip = 100;
+            else if (v.Y >= MapH) _hoverTooltip = 101;
+        }
+    }
+
+    private int DrawChunk(int x, int y, string title, (string text, Color color)[] lines, float bar = -1f, Color? barColor = null, float markFrac = -1f)
+    {
+        int h = 22 + lines.Length * 17 + (bar >= 0f ? 14 : 4);
+        var panel = new Rectangle(x, y, SideW - 20, h);
+        FillRect(panel, ChunkFill);
+        OutlineRect(panel, PanelLine);
+        _font.Draw(_spriteBatch, title, x + 8, y + 5, TextDim);
+        int ly = y + 22;
+        foreach (var (text, color) in lines)
+        {
+            _font.Draw(_spriteBatch, text, x + 8, ly, color);
+            ly += 17;
+        }
+        if (bar >= 0f)
+        {
+            var barRect = new Rectangle(x + 8, ly + 2, SideW - 36, 8);
+            DrawBar(barRect, bar, barColor ?? TextGold);
+            if (markFrac >= 0f)
+            {
+                int mx = barRect.X + (int)(barRect.Width * Math.Clamp(markFrac, 0f, 1f));
+                FillRect(new Rectangle(mx, barRect.Y - 2, 2, barRect.Height + 4), TextRed);
+            }
+        }
+        return y + h + 8;
+    }
 
     private void DrawSidebar()
     {
-        FillRect(new Rectangle(SideX, 0, SideW, WindowHeight), PanelColor);
-        FillRect(new Rectangle(SideX, 0, 2, WindowHeight), PanelLine);
+        FillRect(new Rectangle(SideX, 0, SideW, TargetHeight), PanelColor);
+        FillRect(new Rectangle(SideX, 0, 2, TargetHeight), PanelLine);
 
         int x = SideX + 10;
         int y = 12;
-
         _font.Draw(_spriteBatch, "DATA", x, y, TextGold, 3);
         _font.Draw(_spriteBatch, "TYCOON", x + 44, y + 24, TextCyan, 3);
-        y += 52;
-        FillRect(new Rectangle(x, y, SideW - 20, 1), PanelLine);
-        y += 10;
+        y += 58;
 
-        _font.Draw(_spriteBatch, $"DAY {_sim.Day}", x, y, Color.White);
-        y += 22;
+        y = DrawChunk(x, y, "FINANCE", new (string, Color)[]
+        {
+            ($"DAY {_sim.Day}", Color.White),
+            ($"CASH {ShortMoney(_sim.Money)}", Color.White),
+            ($"VALUE {ShortMoney(_sim.NetWorth)} / {ShortMoney(Sim.WIN_CASH_GOAL)}", TextGold),
+        }, bar: _sim.NetWorth / Sim.WIN_CASH_GOAL, barColor: TextGold);
 
-        _font.Draw(_spriteBatch, $"CASH {ShortMoney(_sim.Money)}", x, y, Color.White);
-        y += 20;
-
-        _font.Draw(_spriteBatch, $"VALUE {ShortMoney(_sim.NetWorth)}", x, y, TextGold);
-        y += 16;
-        DrawBar(new Rectangle(x, y, SideW - 20, 9), _sim.NetWorth / Sim.WIN_CASH_GOAL, TextGold);
-        y += 12;
-        _font.Draw(_spriteBatch, $"GOAL {ShortMoney(Sim.WIN_CASH_GOAL)}", x, y, TextDim);
-        y += 26;
-
-        float proj = _sim.ProjectedHappiness();
         Color hColor = HappinessColor(_sim.Happiness);
-        _font.Draw(_spriteBatch, $"HAPPY {_sim.Happiness:F0}", x, y, hColor);
-        if (Math.Abs(proj - _sim.Happiness) >= 1f)
-            _font.Draw(_spriteBatch, $"> {proj:F0}", x + 110, y, HappinessColor(proj));
-        y += 16;
-        var hbar = new Rectangle(x, y, SideW - 20, 9);
-        DrawBar(hbar, _sim.Happiness / 100f, hColor);
-        int markX = hbar.X + (int)(hbar.Width * (Sim.HAPPINESS_LOSE / 100f));
-        FillRect(new Rectangle(markX, hbar.Y - 2, 2, hbar.Height + 4), TextRed);
-        y += 20;
+        float proj = _sim.ProjectedHappiness();
+        string happy = Math.Abs(proj - _sim.Happiness) >= 1f ? $"HAPPY {_sim.Happiness:F0} > {proj:F0}" : $"HAPPY {_sim.Happiness:F0}";
+        y = DrawChunk(x, y, "MORALE", new (string, Color)[]
+        {
+            (happy, hColor),
+            ($"REVOLT BELOW {Sim.HAPPINESS_LOSE:F0}", TextDim),
+        }, bar: _sim.Happiness / 100f, barColor: hColor, markFrac: Sim.HAPPINESS_LOSE / 100f);
 
         var (demand, served) = _sim.DemandServed();
         float pct = demand > 0f ? served / demand * 100f : 100f;
         Color servedColor = pct >= 99.5f ? TextGreen : (pct >= 70f ? Color.White : TextOrange);
-        _font.Draw(_spriteBatch, $"SRV {served:F0}/{demand:F0}", x, y, servedColor);
-        y += 18;
-        _font.Draw(_spriteBatch, $"BLACKOUT {100f - pct:F0}%", x, y, pct >= 99.5f ? TextDim : TextOrange);
-        y += 18;
-        if (_sim.Day > 1)
+        y = DrawChunk(x, y, "GRID", new (string, Color)[]
         {
-            Color netColor = _sim.LastNet >= 0 ? TextGreen : TextRed;
-            _font.Draw(_spriteBatch, $"NET {ShortMoney(_sim.LastNet)}/DAY", x, y, netColor);
-        }
-        else
-        {
-            _font.Draw(_spriteBatch, "SERVE TOWNS", x, y, TextDim);
-        }
-        y += 18;
-        _font.Draw(_spriteBatch, $"COOLED {_sim.CooledStructureTiles}/{_sim.StructureTiles}", x, y, TextCyan);
-        y += 18;
-        _font.Draw(_spriteBatch, $"DEMAND +{Sim.DAILY_DEMAND_GROWTH * 100f:F1}%/D", x, y, TextDim);
+            ($"SERVED {served:F0}/{demand:F0}", servedColor),
+            ($"BROWNOUT {100f - pct:F0}%", pct >= 99.5f ? TextDim : TextOrange),
+            ($"POWER {_sim.PowerProduced:F0}/{_sim.PowerDemanded:F0}", _sim.PowerShortfallActive ? TextRed : TextCyan),
+            ($"COOLED {_sim.CooledStructureTiles}/{_sim.StructureTiles}", TextCyan),
+        });
 
-        _font.Draw(_spriteBatch, "BUILD", x, 368, TextDim);
-        foreach (var (tool, type, icon, key) in ToolDefs)
+        int by = 360;
+        _font.Draw(_spriteBatch, "BUILD", x, by - 20, TextDim);
+        for (int i = 0; i < ToolDefs.Length; i++)
         {
+            var (tool, type, icon, key) = ToolDefs[i];
             var r = ToolButtonRect(tool);
             bool selected = _tool == tool;
-            FillRect(r, selected ? new Color(44, 48, 66) : new Color(28, 30, 40));
+            bool hover = _hoverTooltip == i;
+            FillRect(r, selected ? new Color(44, 48, 66) : (hover ? new Color(38, 40, 52) : ChunkFill));
             OutlineRect(r, selected ? TextGold : PanelLine);
-            _spriteBatch.Draw(_art.Atlas, new Rectangle(r.X + 4, r.Y + 4, 36, 36), _art.Src(icon), Color.White);
-            string name = type != StructureType.None ? Structures.Get(type).Short : "RAZE";
-            _font.Draw(_spriteBatch, $"{key} {name}", r.X + 46, r.Y + 6, selected ? Color.White : TextDim);
+            _spriteBatch.Draw(_art.Atlas, new Rectangle(r.X + 3, r.Y + 3, 32, 32), _art.Src(icon), Color.White);
+            string name = Structures.Display(type);
+            _font.Draw(_spriteBatch, $"{key} {name}", r.X + 42, r.Y + 5, selected ? Color.White : TextDim);
             string sub = type != StructureType.None ? ShortMoney(Structures.Get(type).Cost) : "50% BACK";
-            _font.Draw(_spriteBatch, sub, r.X + 46, r.Y + 24, selected ? TextGold : TextDim);
+            _font.Draw(_spriteBatch, sub, r.X + 42, r.Y + 21, selected ? TextGold : TextDim);
         }
 
-        int iy = 386 + ToolDefs.Length * 48 + 10;
+        int iy = ToolButtonRect(Tool.Raze).Bottom + 12;
         FillRect(new Rectangle(x, iy - 6, SideW - 20, 1), PanelLine);
-        if (_tool != Tool.Raze)
-        {
-            var def = Structures.Get(ToolDefs[(int)_tool].type);
-            _font.Draw(_spriteBatch, def.Name, x, iy, Color.White); iy += 20;
-            _font.Draw(_spriteBatch, $"UPKEEP {def.Upkeep:F1}", x, iy, TextDim); iy += 18;
-            _font.Draw(_spriteBatch, $"COOLED {def.Upkeep * Sim.COOLED_OP_FACTOR:F1}", x, iy, TextCyan); iy += 18;
-            if (def.Compute > 0)
-            {
-                _font.Draw(_spriteBatch, $"SERVES {def.Compute:F0}", x, iy, TextGreen); iy += 18;
-                _font.Draw(_spriteBatch, $"ANGER {def.NimbyLoad:F1}", x, iy, TextOrange); iy += 18;
-            }
-            else
-            {
-                _font.Draw(_spriteBatch, $"COMFORT +{def.ComfortAdd:F0}", x, iy, TextGreen); iy += 18;
-                _font.Draw(_spriteBatch, "CALMS A TOWN", x, iy, TextDim); iy += 18;
-            }
-        }
-        else
-        {
-            _font.Draw(_spriteBatch, "BULLDOZE", x, iy, Color.White); iy += 20;
-            _font.Draw(_spriteBatch, "REMOVE TILES", x, iy, TextDim); iy += 18;
-            _font.Draw(_spriteBatch, "REFUND 50%", x, iy, TextOrange); iy += 18;
-        }
-
-        int ly = 800;
-        FillRect(new Rectangle(x, ly - 8, SideW - 20, 1), PanelLine);
-        _font.Draw(_spriteBatch, "MAP KEY", x, ly, TextDim); ly += 20;
-        FillRect(new Rectangle(x, ly + 1, 12, 12), CoolTint * 0.5f);
-        _font.Draw(_spriteBatch, "COOL CHEAP", x + 18, ly, TextCyan); ly += 20;
-        FillRect(new Rectangle(x, ly + 1, 12, 12), TownTints[0] * 0.5f);
-        _font.Draw(_spriteBatch, "CATCHMENT", x + 18, ly, TextDim); ly += 20;
-        FillRect(new Rectangle(x, ly + 1, 12, 12), new Color(28, 92, 44));
-        _font.Draw(_spriteBatch, "FOREST CALMS", x + 18, ly, TextGreen);
-
-        int hy = WindowHeight - 148;
-        FillRect(new Rectangle(x, hy - 8, SideW - 20, 1), PanelLine);
-        _font.Draw(_spriteBatch, "SPACE END DAY", x, hy, TextGold); hy += 18;
-        _font.Draw(_spriteBatch, "DRAG BUILD", x, hy, TextDim); hy += 18;
-        _font.Draw(_spriteBatch, "RCLICK RAZE 1", x, hy, TextDim); hy += 18;
-        _font.Draw(_spriteBatch, "H HELP  M MUTE", x, hy, TextDim); hy += 18;
-        _font.Draw(_spriteBatch, "R RETRY  N NEW", x, hy, TextDim); hy += 18;
-        _font.Draw(_spriteBatch, "ESC QUIT", x, hy, TextDim);
+        DrawToolInfo(x, iy);
     }
 
-    private void DrawBottomBar()
+    private void DrawToolInfo(int x, int y)
     {
-        FillRect(new Rectangle(0, BottomY, MapW, BottomH), PanelColor);
-        FillRect(new Rectangle(0, BottomY, MapW, 2), PanelLine);
+        if (_tool == Tool.Raze)
+        {
+            _font.Draw(_spriteBatch, "BULLDOZE", x, y, Color.White); y += 18;
+            _font.Draw(_spriteBatch, "REFUND 50%", x, y, TextOrange); y += 18;
+            _font.Draw(_spriteBatch, "RCLICK = 1 TILE", x, y, TextDim);
+            return;
+        }
+        var def = Structures.Get(ToolDefs[(int)_tool].type);
+        _font.Draw(_spriteBatch, def.Name, x, y, Color.White); y += 18;
+        _font.Draw(_spriteBatch, $"UPKEEP {def.Upkeep:F1}", x, y, TextDim); y += 17;
+        if (def.PowerDraw > 0f) { _font.Draw(_spriteBatch, $"POWER DRAW {def.PowerDraw:F1}", x, y, TextCyan); y += 17; }
+        if (def.PowerOutput > 0f) { _font.Draw(_spriteBatch, $"POWER OUT {def.PowerOutput:F0}", x, y, TextGreen); y += 17; }
+        if (def.Compute > 0f)
+        {
+            _font.Draw(_spriteBatch, $"SERVES {def.Compute:F0}", x, y, TextGreen); y += 17;
+            _font.Draw(_spriteBatch, $"ANGER {def.NimbyLoad:F1}", x, y, TextOrange); y += 17;
+        }
+        if (def.ComfortAdd > 0f) { _font.Draw(_spriteBatch, $"COMFORT +{def.ComfortAdd:F0}", x, y, TextGreen); y += 17; }
+        if (def.CoolingReach > 0) { _font.Draw(_spriteBatch, "COOLS NEARBY 55%", x, y, TextCyan); y += 17; }
+        if (def.PassiveIncome > 0f) { _font.Draw(_spriteBatch, $"INCOME {Money(def.PassiveIncome)}/D", x, y, TextGreen); y += 17; }
+    }
+
+    private void DrawBottomBar(Point v)
+    {
+        FillRect(new Rectangle(0, MapH, MapW, TargetHeight - MapH), PanelColor);
+        FillRect(new Rectangle(0, MapH, MapW, 2), PanelLine);
 
         var map = _sim.Map;
-        int chipW = 560;
-        for (int i = 0; i < map.Towns.Count && i < 3; i++)
+        int towns = map.Towns.Count;
+        int chipGap = 12;
+        int chipW = Math.Max(360, (MapW - chipGap * (towns + 1)) / Math.Max(1, towns));
+        int chipH = TargetHeight - MapH - 20;
+        for (int i = 0; i < towns; i++)
         {
             var t = map.Towns[i];
-            int cx = 12 + i * (chipW + 12);
-            int cy = BottomY + 10;
-            var chip = new Rectangle(cx, cy, chipW, BottomH - 20);
-            FillRect(chip, new Color(28, 30, 40));
+            int cx = chipGap + i * (chipW + chipGap);
+            int cy = MapH + 10;
+            var chip = new Rectangle(cx, cy, chipW, chipH);
+            FillRect(chip, ChunkFill);
             OutlineRect(chip, PanelLine);
-            FillRect(new Rectangle(cx, cy, 4, chip.Height), TownTints[i % TownTints.Length]);
+            FillRect(new Rectangle(cx, cy, 4, chipH), TownTints[i % TownTints.Length]);
 
             float dem = _sim.DemandForTown(t.Id);
             float served = Math.Min(dem, _sim.TownCompute(t.Id));
@@ -600,30 +800,30 @@ public class Game1 : Game
 
             _font.Draw(_spriteBatch, TownName(t.Id), cx + 14, cy + 8, Color.White);
             string srv = $"SRV {served:F0}/{dem:F0}";
-            _font.Draw(_spriteBatch, srv, cx + 190, cy + 8, served >= dem - 0.5f ? TextGreen : TextOrange);
+            _font.Draw(_spriteBatch, srv, cx + chipW - 260, cy + 8, served >= dem - 0.5f ? TextGreen : TextOrange);
             string mood = MoodWord(ratio);
-            _font.Draw(_spriteBatch, mood, cx + 400, cy + 8, MoodColor(ratio));
+            _font.Draw(_spriteBatch, mood, cx + chipW - 120, cy + 8, MoodColor(ratio));
+            DrawMoodGlyph(new Rectangle(cx + chipW - 26, cy + 8, 10, 10), ratio <= 0.85f);
 
             _font.Draw(_spriteBatch, $"CROWDING {ratio * 100f:F0}%", cx + 14, cy + 34, TextDim);
-            var bar = new Rectangle(cx + 190, cy + 38, 160, 8);
+            var bar = new Rectangle(cx + chipW - 260, cy + 38, 220, 8);
             DrawBar(bar, Math.Min(1f, ratio / 1.3f), MoodColor(ratio));
             int comfortMark = bar.X + (int)(bar.Width / 1.3f);
             FillRect(new Rectangle(comfortMark, bar.Y - 2, 2, bar.Height + 4), Color.White);
             float relief = _sim.TownRelief(t.Id);
             if (relief > 0.001f)
-                _font.Draw(_spriteBatch, $"FOREST -{relief * 100f:F0}%", cx + 400, cy + 34, TextGreen);
+                _font.Draw(_spriteBatch, $"FOREST -{relief * 100f:F0}%", cx + chipW - 120, cy + 34, TextGreen);
 
-            _font.Draw(_spriteBatch, $"COMFORT {_sim.TownComfort(t.Id):F0}", cx + 14, cy + 60, TextDim);
-            _font.Draw(_spriteBatch, $"ANGER {_sim.TownNimby(t.Id):F1}", cx + 190, cy + 60, ratio > 1f ? TextRed : TextDim);
+            _font.Draw(_spriteBatch, $"COMFORT {_sim.TownComfort(t.Id):F0}", cx + 14, cy + 58, TextDim);
+            _font.Draw(_spriteBatch, $"ANGER {_sim.TownNimby(t.Id):F1}", cx + chipW - 260, cy + 58, ratio > 1f ? TextRed : TextDim);
             int parks = (int)(_sim.TownParkComfort(t.Id) / Structures.Park.ComfortAdd + 0.5f);
-            if (parks > 0)
-                _font.Draw(_spriteBatch, $"PARKS {parks}", cx + 400, cy + 60, TextGreen);
+            if (parks > 0) _font.Draw(_spriteBatch, $"PARKS {parks}", cx + chipW - 120, cy + 58, TextGreen);
         }
     }
 
     private void DrawToasts()
     {
-        int ty = BottomY - 30;
+        int ty = MapH - 30;
         if (_sim.Happiness < Sim.HAPPINESS_WARN && _sim.State == RunState.Playing && (int)(_animTime * 2f) % 2 == 0)
         {
             DrawLabel("! REVOLT RISK !", 12, ty, TextRed);
@@ -636,6 +836,45 @@ public class Game1 : Game
         }
     }
 
+    private void DrawTicker()
+    {
+        if (_clock >= _tickerUntil || _tickerText.Length == 0) return;
+        int w = _font.Width(_tickerText) + 24;
+        var r = new Rectangle((MapW - w) / 2, MapH + 6, w, 30);
+        FillRect(r, Color.Black * 0.75f);
+        OutlineRect(r, TextGold);
+        _font.Draw(_spriteBatch, _tickerText, r.X + 12, r.Y + 9, TextGold);
+    }
+
+    private static readonly string[] Tooltips =
+    {
+        "SERVER SHED: cheap, serves 1. Best early ROI.",
+        "DATA HALL: serves 3, 1.6 compute per anger.",
+        "HYPERSCALE: serves 7, densest compute. Runs hot.",
+        "PARK: +3 comfort to its town. Uses a tile.",
+        "COOLING TOWER: cools nearby tiles to 55% upkeep.",
+        "POWER PLANT: supplies 22 power for your grid.",
+        "E-WASTE RECYCLER: $6/day passive, mild anger.",
+        "BULLDOZE: 50% refund. Right-click a single tile.",
+    };
+
+    private void DrawTooltip(Point v)
+    {
+        if (_hoverTooltip < 0) return;
+        string text;
+        if (_hoverTooltip == 100) text = "HAPPINESS: below 35 the towns revolt.";
+        else if (_hoverTooltip == 101) text = "Per-town readout: served, crowding, comfort, anger.";
+        else text = Tooltips[_hoverTooltip];
+
+        var size = _font.Width(text);
+        int tx = Math.Min(v.X + 16, MapW - size - 8);
+        int ty = Math.Min(v.Y + 16, MapH - 30);
+        var r = new Rectangle(tx - 6, ty - 6, size + 12, _font.Height() + 12);
+        FillRect(r, new Color(8, 8, 12) * 0.92f);
+        OutlineRect(r, PanelLine);
+        _font.Draw(_spriteBatch, text, tx, ty, Color.White);
+    }
+
     private static string MoodWord(float ratio)
         => ratio <= 0.5f ? "CONTENT" : (ratio <= 0.85f ? "UNEASY" : (ratio <= 1.05f ? "TENSE" : "FURIOUS"));
 
@@ -644,15 +883,15 @@ public class Game1 : Game
 
     private void DrawHelp()
     {
-        FillRect(new Rectangle(0, 0, WindowWidth, WindowHeight), Color.Black * 0.75f);
-        int w = 900, h = 640;
-        var panel = new Rectangle((WindowWidth - w) / 2, (WindowHeight - h) / 2, w, h);
+        FillRect(new Rectangle(0, 0, TargetWidth, TargetHeight), Color.Black * 0.78f);
+        int w = 1000, h = 700;
+        var panel = new Rectangle((TargetWidth - w) / 2, (TargetHeight - h) / 2, w, h);
         FillRect(panel, PanelColor);
         OutlineRect(panel, TextGold);
 
-        int x = panel.X + 24;
-        int y = panel.Y + 20;
-        _font.Draw(_spriteBatch, "HOW TO PLAY", x, y, TextGold, 3); y += 40;
+        int x = panel.X + 28;
+        int y = panel.Y + 22;
+        _font.Draw(_spriteBatch, "HOW TO PLAY", x, y, TextGold, 3); y += 44;
 
         string[] lines =
         {
@@ -661,17 +900,21 @@ public class Game1 : Game
             "",
             "SHEDS ARE CHEAP CASH FLOW. HALLS AND HYPERSCALE SERVE MORE",
             "DEMAND PER TILE AND PER POINT OF ANGER - BUT RUN HOT.",
-            "BLUE RIVERFRONT TILES COOL UPKEEP TO 55%. CLAIM THEM.",
+            "BLUE RIVERFRONT TILES COOL UPKEEP TO 55%. COOLING TOWERS",
+            "EXTEND THAT COOLING INLAND.",
             "",
             "CROWDING A TOWN PAST ITS COMFORT MAKES IT FURIOUS - ANGER",
             "GROWS FASTER THE FURTHER PAST COMFORT YOU PACK.",
             "PARKS RAISE A TOWN'S COMFORT. FORESTS LEFT STANDING CALM",
             "TOWNS TOO - CLEARING THEM COSTS 2.5X AND REMOVES THE CALM.",
             "",
+            "POWER PLANTS SUPPLY POWER; HYPERSCALE AND EQUIPMENT DRAW IT.",
+            "RUN SHORT AND MORALE TANKS. E-WASTE RECYCLERS EARN PASSIVE CASH.",
             "UNSERVED DEMAND (BROWNOUTS) ALSO ANGERS EVERYONE.",
             "YOU CANNOT SERVE IT ALL FOREVER. CHOOSE WHAT TO SACRIFICE.",
             "",
             "BUILD OVER A CHEAPER BUILDING TO UPGRADE IT IN PLACE.",
+            "PRESS Z TO UNDO YOUR LAST BUILD OR RAZE.",
             "REACH THE COMPANY VALUE GOAL BEFORE THE TOWNS REVOLT",
             "OR THE MONEY RUNS OUT.",
         };
@@ -680,27 +923,51 @@ public class Game1 : Game
             _font.Draw(_spriteBatch, line, x, y, line.Length == 0 ? TextDim : Color.White);
             y += 24;
         }
-        y += 12;
+        y += 10;
         _font.Draw(_spriteBatch, "PRESS H TO CLOSE", x, y, TextGold);
     }
 
     private void DrawEndScreen()
     {
-        FillRect(new Rectangle(0, 0, WindowWidth, WindowHeight), Color.Black * 0.72f);
+        FillRect(new Rectangle(0, 0, TargetWidth, TargetHeight), Color.Black * 0.78f);
         bool won = _sim.State == RunState.Won;
         string title = won ? "YOU WIN" : "GAME OVER";
         Color titleColor = won ? TextGold : TextRed;
         int scale = 8;
         int tw = _font.Width(title, scale);
-        _font.Draw(_spriteBatch, title, (WindowWidth - tw) / 2, WindowHeight / 2 - 170, titleColor, scale);
+        _font.Draw(_spriteBatch, title, (TargetWidth - tw) / 2, 200, titleColor, scale);
 
-        DrawCentered(_sim.EndReason, WindowHeight / 2 - 40, Color.White);
-        DrawCentered($"DAY {_sim.Day}   VALUE {Money(_sim.NetWorth)}   HAPPY {_sim.Happiness:F0}", WindowHeight / 2, TextDim);
-        DrawCentered("R RETRY THIS REGION      N NEW REGION", WindowHeight / 2 + 60, TextGold);
+        DrawCentered(_sim.EndReason, 340, Color.White);
+
+        int pw = 720, ph = 240;
+        var card = new Rectangle((TargetWidth - pw) / 2, 400, pw, ph);
+        FillRect(card, ChunkFill);
+        OutlineRect(card, PanelLine);
+        int cx = card.X + 30, cy = card.Y + 24;
+        _font.Draw(_spriteBatch, "FINAL TALLY", cx, cy, TextGold, 2); cy += 40;
+
+        int parks = (int)((_sim.TownParkComfort(0) + _sim.TownParkComfort(Math.Max(0, _sim.Map.Towns.Count - 1))) / Structures.Park.ComfortAdd + 0.5f);
+        var rows = new (string, string)[]
+        {
+            ("DAYS SURVIVED", $"{_sim.Day}"),
+            ("FINAL VALUE", Money(_sim.NetWorth)),
+            ("PEAK VALUE", $"{Money(_sim.PeakValue)} (DAY {_sim.PeakDay})"),
+            ("STRUCTURES BUILT", $"{_sim.StructureTiles}  (PEAK {_sim.PeakStructures})"),
+            ("BEST DEMAND SERVED", $"{_sim.PeakDemandServed}"),
+            ("FINAL HAPPINESS", $"{_sim.Happiness:F0}"),
+        };
+        foreach (var (label, value) in rows)
+        {
+            _font.Draw(_spriteBatch, label, cx, cy, TextDim);
+            _font.Draw(_spriteBatch, value, cx + 360, cy, Color.White);
+            cy += 26;
+        }
+
+        DrawCentered("R RETRY THIS REGION      N NEW REGION      ESC MENU", 700, TextGold);
     }
 
     private void DrawCentered(string text, int y, Color color)
-        => _font.Draw(_spriteBatch, text, (WindowWidth - _font.Width(text)) / 2, y, color);
+        => _font.Draw(_spriteBatch, text, (TargetWidth - _font.Width(text)) / 2, y, color);
 
     private void DrawLabel(string text, int x, int y, Color color)
     {
@@ -746,18 +1013,30 @@ public class Game1 : Game
             _sim = sim;
             return true;
         }
-        catch
+        catch { return false; }
+    }
+
+    private void SaveSettings()
+    {
+        try { File.WriteAllText(SettingsFileName, _soundOn ? "sound=1" : "sound=0"); } catch { }
+    }
+
+    private void LoadSettings()
+    {
+        try
         {
-            return false;
+            if (!File.Exists(SettingsFileName)) return;
+            _soundOn = File.ReadAllText(SettingsFileName).Contains("sound=1");
         }
+        catch { }
     }
 
     private void SaveScreenshot()
     {
-        int w = GraphicsDevice.PresentationParameters.BackBufferWidth;
-        int h = GraphicsDevice.PresentationParameters.BackBufferHeight;
+        int w = _scene.Width;
+        int h = _scene.Height;
         var data = new Color[w * h];
-        GraphicsDevice.GetBackBufferData(data);
+        _scene.GetData(data);
         using var tex = new Texture2D(GraphicsDevice, w, h);
         tex.SetData(data);
         using var stream = File.Create(_shotPath);

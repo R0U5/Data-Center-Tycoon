@@ -28,10 +28,14 @@ public class Sim
     public const float HAPPINESS_RISE = 0.16f;
     public const float HAPPINESS_LOSE = 35f;
     public const float HAPPINESS_WARN = 50f;
+    public const int SAVE_VERSION = 4;
+
+    public const float POWER_SHORTFALL_PENALTY = 40f;
 
     public MapGenerator Map { get; private set; }
     public StructureType[,] Grid { get; private set; }
     public float[,] Paid { get; private set; }
+    public bool[,] LocalCooled { get; private set; }
 
     public float Money { get; private set; }
     public float TotalDemand { get; private set; }
@@ -42,6 +46,13 @@ public class Sim
     public float LastRevenue { get; private set; }
     public float LastOpCost { get; private set; }
     public float LastNet { get; private set; }
+    public float LastPassive { get; private set; }
+    public float LastCoolingSaving { get; private set; }
+
+    public float PeakValue { get; private set; }
+    public int PeakDay { get; private set; }
+    public int PeakStructures { get; private set; }
+    public int PeakDemandServed { get; private set; }
 
     private float[] _townCompute = Array.Empty<float>();
     private float[] _townLoad = Array.Empty<float>();
@@ -49,9 +60,12 @@ public class Sim
     private int[] _townCoveredForest = Array.Empty<int>();
     private int _townSizeDenom = 1;
     private float _upkeepTotal;
+    private float _upkeepTotalUncooled;
     private float _assetPaid;
     private int _structureTiles;
     private int _cooledStructureTiles;
+    private float _powerProduced;
+    private float _powerDemanded;
 
     public Sim(MapGenerator map)
     {
@@ -63,13 +77,18 @@ public class Sim
     {
         Grid = new StructureType[MapGenerator.GridWidth, MapGenerator.GridHeight];
         Paid = new float[MapGenerator.GridWidth, MapGenerator.GridHeight];
+        LocalCooled = new bool[MapGenerator.GridWidth, MapGenerator.GridHeight];
         Money = START_MONEY;
         TotalDemand = BASE_DEMAND;
         Happiness = 100f;
         Day = 1;
         State = RunState.Playing;
         EndReason = "";
-        LastRevenue = LastOpCost = LastNet = 0f;
+        LastRevenue = LastOpCost = LastNet = LastPassive = LastCoolingSaving = 0f;
+        PeakValue = NetWorth;
+        PeakDay = 1;
+        PeakStructures = 0;
+        PeakDemandServed = 0;
         InitTownState();
         RecalculateAggregates();
     }
@@ -88,7 +107,12 @@ public class Sim
     public int CooledStructureTiles => _cooledStructureTiles;
     public float NetWorth => Money + _assetPaid * REFUND_FRACTION;
     public float CoolingSaving => _upkeepTotalUncooled - _upkeepTotal;
-    private float _upkeepTotalUncooled;
+    public float PowerProduced => _powerProduced;
+    public float PowerDemanded => _powerDemanded;
+    public float PowerMargin => _powerProduced - _powerDemanded;
+    public bool PowerStarved => _powerDemanded > _powerProduced + 0.001f;
+    public bool HasPowerGrid => _powerProduced > 0f;
+    public bool PowerShortfallActive => HasPowerGrid && PowerStarved;
 
     public float DemandForTown(int id) => Map.Towns[id].Size / (float)_townSizeDenom * TotalDemand;
     public float TownCompute(int id) => _townCompute[id];
@@ -139,11 +163,18 @@ public class Sim
         return crowding * (1f - TownRelief(id));
     }
 
+    public float BrownoutFraction()
+    {
+        var (d, s) = DemandServed();
+        return d > 0f ? Math.Clamp(1f - s / d, 0f, 1f) : 0f;
+    }
+
     public float HappinessTarget()
     {
         var (d, s) = DemandServed();
         float brownout = d > 0f ? BROWNOUT_WEIGHT * (1f - s / d) : 0f;
-        return 100f - NimbyTotal() - brownout;
+        float powerPenalty = PowerShortfallActive ? POWER_SHORTFALL_PENALTY : 0f;
+        return 100f - NimbyTotal() - brownout - powerPenalty;
     }
 
     public float ProjectedHappiness()
@@ -189,20 +220,29 @@ public class Sim
 
     public int PlaceRegion(int x0, int y0, int x1, int y1, StructureType type)
     {
-        var (tiles, cost) = RegionPlan(x0, y0, x1, y1, type);
-        if (tiles == 0 || Money < cost) return 0;
+        var tiles = new List<(int x, int y)>();
+        float cost = 0f;
         for (int x = Math.Min(x0, x1); x <= Math.Max(x0, x1); x++)
             for (int y = Math.Min(y0, y1); y <= Math.Max(y0, y1); y++)
                 if (CanPlaceAt(x, y, type))
                 {
-                    Money -= TileCostAt(x, y, type);
-                    float basePaid = Structures.Get(type).Cost;
-                    if (Map.Tiles[x, y] == TileType.Forest) basePaid *= FOREST_BUILD_MULT;
-                    Grid[x, y] = type;
-                    Paid[x, y] = basePaid;
+                    tiles.Add((x, y));
+                    cost += TileCostAt(x, y, type);
                 }
+        if (tiles.Count == 0 || Money < cost) return 0;
+
+        float defCost = Structures.Get(type).Cost;
+        foreach (var (x, y) in tiles)
+        {
+            float paid = defCost;
+            if (Map.Tiles[x, y] == TileType.Forest) paid *= FOREST_BUILD_MULT;
+            Money -= TileCostAt(x, y, type);
+            Grid[x, y] = type;
+            Paid[x, y] = paid;
+        }
         RecalculateAggregates();
-        return tiles;
+        CheckWin();
+        return tiles.Count;
     }
 
     public bool TryPlace(int x, int y, StructureType type)
@@ -236,19 +276,39 @@ public class Sim
         return removed;
     }
 
+    private void CheckWin()
+    {
+        if (State != RunState.Playing) return;
+        if (NetWorth >= WIN_CASH_GOAL)
+        {
+            State = RunState.Won;
+            EndReason = $"YOU BUILT A ${WIN_CASH_GOAL:N0} COMPUTE EMPIRE";
+        }
+    }
+
     public void AdvanceDay()
     {
         if (State != RunState.Playing) return;
         var (_, served) = DemandServed();
         LastRevenue = REVENUE_PER_SERVED * served;
         LastOpCost = _upkeepTotal;
-        LastNet = LastRevenue - LastOpCost;
+        LastPassive = _passiveIncome;
+        LastCoolingSaving = CoolingSaving;
+        LastNet = LastRevenue - LastOpCost + LastPassive;
         Money += LastNet;
 
         Happiness = ProjectedHappiness();
 
         TotalDemand *= 1f + DAILY_DEMAND_GROWTH;
         Day++;
+
+        if (NetWorth > PeakValue)
+        {
+            PeakValue = NetWorth;
+            PeakDay = Day;
+        }
+        if (_structureTiles > PeakStructures) PeakStructures = _structureTiles;
+        if (served > PeakDemandServed) PeakDemandServed = (int)served;
 
         if (Happiness < HAPPINESS_LOSE)
         {
@@ -260,12 +320,13 @@ public class Sim
             State = RunState.Lost;
             EndReason = "YOU WENT BANKRUPT";
         }
-        else if (NetWorth >= WIN_CASH_GOAL)
+        else
         {
-            State = RunState.Won;
-            EndReason = $"YOU BUILT A ${WIN_CASH_GOAL:N0} COMPUTE EMPIRE";
+            CheckWin();
         }
     }
+
+    private float _passiveIncome;
 
     private void RecalculateAggregates()
     {
@@ -278,6 +339,32 @@ public class Sim
         _assetPaid = 0f;
         _structureTiles = 0;
         _cooledStructureTiles = 0;
+        _powerProduced = 0f;
+        _powerDemanded = 0f;
+        _passiveIncome = 0f;
+
+        for (int x = 0; x < MapGenerator.GridWidth; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+                LocalCooled[x, y] = false;
+
+        for (int x = 0; x < MapGenerator.GridWidth; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+            {
+                var s = Grid[x, y];
+                if (s == StructureType.None) continue;
+                var def = Structures.Get(s);
+                if (def.Cools)
+                {
+                    int r = def.CoolingReach;
+                    for (int dx = -r; dx <= r; dx++)
+                        for (int dy = -r; dy <= r; dy++)
+                        {
+                            int nx = x + dx, ny = y + dy;
+                            if (nx < 0 || nx >= MapGenerator.GridWidth || ny < 0 || ny >= MapGenerator.GridHeight) continue;
+                            LocalCooled[nx, ny] = true;
+                        }
+                }
+            }
 
         for (int x = 0; x < MapGenerator.GridWidth; x++)
             for (int y = 0; y < MapGenerator.GridHeight; y++)
@@ -287,10 +374,13 @@ public class Sim
                 var def = Structures.Get(s);
                 _structureTiles++;
                 _assetPaid += Paid[x, y];
-                bool cooled = Map.Cooled[x, y];
+                bool cooled = Map.Cooled[x, y] || LocalCooled[x, y];
                 if (cooled) _cooledStructureTiles++;
                 _upkeepTotal += def.Upkeep * (cooled ? COOLED_OP_FACTOR : 1f);
                 _upkeepTotalUncooled += def.Upkeep;
+                _powerProduced += def.PowerOutput;
+                _powerDemanded += def.PowerDraw;
+                _passiveIncome += def.PassiveIncome;
                 int t = Map.CatchmentTown[x, y];
                 if (t >= 0 && t < _townCompute.Length)
                 {
@@ -305,13 +395,18 @@ public class Sim
     public string Serialize()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("v3");
+        sb.AppendLine($"v{SAVE_VERSION}");
         sb.AppendLine($"seed={Map.Seed}");
         sb.AppendLine($"day={Day}");
         sb.AppendLine(FormattableString.Invariant($"money={Money}"));
         sb.AppendLine(FormattableString.Invariant($"demand={TotalDemand}"));
         sb.AppendLine(FormattableString.Invariant($"happiness={Happiness}"));
         sb.AppendLine($"state={State}");
+        sb.AppendLine($"reason={Escape(EndReason)}");
+        sb.AppendLine(FormattableString.Invariant($"peak={PeakValue}"));
+        sb.AppendLine($"peakday={PeakDay}");
+        sb.AppendLine(FormattableString.Invariant($"served={PeakDemandServed}"));
+        sb.AppendLine($"structs={PeakStructures}");
         for (int x = 0; x < MapGenerator.GridWidth; x++)
             for (int y = 0; y < MapGenerator.GridHeight; y++)
                 if (Grid[x, y] != StructureType.None)
@@ -319,12 +414,14 @@ public class Sim
         return sb.ToString();
     }
 
+    private static string Escape(string s) => (s ?? "").Replace("\n", " ").Replace("\r", " ");
+
     public static Sim Deserialize(string text)
     {
         var lines = text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
         if (lines.Length == 0) return null;
 
-        if (lines[0] != "v3")
+        if (lines[0] != $"v{SAVE_VERSION}" && lines[0] != "v3")
         {
             if (long.TryParse(lines[0], out var legacySeed))
                 return new Sim(new MapGenerator(legacySeed));
@@ -339,6 +436,9 @@ public class Sim
         int day = 1;
         float money = START_MONEY, demand = BASE_DEMAND, happiness = 100f;
         var state = RunState.Playing;
+        string reason = "";
+        float peak = -1f;
+        int peakDay = 1, servedPeak = 0, structsPeak = 0;
         var tiles = new List<(int x, int y, StructureType s, float paid)>();
 
         foreach (var line in lines.Skip(1))
@@ -355,12 +455,18 @@ public class Sim
                 case "demand": demand = ParseFloat(val, BASE_DEMAND); break;
                 case "happiness": happiness = ParseFloat(val, 100f); break;
                 case "state": Enum.TryParse(val, out state); break;
+                case "reason": reason = val; break;
+                case "peak": peak = ParseFloat(val, -1f); break;
+                case "peakday": int.TryParse(val, out peakDay); break;
+                case "served": int.TryParse(val, out servedPeak); break;
+                case "structs": int.TryParse(val, out structsPeak); break;
                 case "s":
                     var p = val.Split(',');
                     if (p.Length == 4
                         && int.TryParse(p[0], out var tx) && int.TryParse(p[1], out var ty)
                         && int.TryParse(p[2], out var ti)
-                        && Enum.IsDefined(typeof(StructureType), ti) && ti != 0)
+                        && Enum.IsDefined(typeof(StructureType), ti) && ti != 0
+                        && ti <= Structures.All.Length)
                         tiles.Add((tx, ty, (StructureType)ti, ParseFloat(p[3], 0f)));
                     break;
             }
@@ -378,10 +484,16 @@ public class Sim
         sim.Happiness = happiness;
         sim.Day = day;
         sim.State = state;
-        sim.EndReason = state == RunState.Won
-            ? $"YOU BUILT A ${WIN_CASH_GOAL:N0} COMPUTE EMPIRE"
-            : (state == RunState.Lost ? "YOUR RUN ENDED" : "");
+        sim.EndReason = !string.IsNullOrEmpty(reason)
+            ? reason
+            : state == RunState.Won
+                ? $"YOU BUILT A ${WIN_CASH_GOAL:N0} COMPUTE EMPIRE"
+                : (state == RunState.Lost ? "YOUR RUN ENDED" : "");
         sim.RecalculateAggregates();
+        sim.PeakValue = peak >= 0f ? Math.Max(peak, sim.NetWorth) : sim.NetWorth;
+        sim.PeakDay = peakDay;
+        sim.PeakDemandServed = servedPeak;
+        sim.PeakStructures = structsPeak > 0 ? structsPeak : sim._structureTiles;
         return sim;
     }
 

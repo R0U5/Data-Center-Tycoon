@@ -9,7 +9,7 @@ public enum Sprite
 {
     GrassA, GrassB, WaterA, WaterB, Tree,
     HouseA, HouseB, Shed, HallA, HallB,
-    CampusA, CampusB, Park, Raze
+    CampusA, CampusB, Park, Raze, Cooling, Power, Recycler
 }
 
 public class PixelArt
@@ -261,6 +261,51 @@ public class PixelArt
             ".xXx....xXx.",
             ".xx......xx.",
             "............",
+        },
+        [Sprite.Cooling] = new[]
+        {
+            "gggggggggggg",
+            "ggssssssssgg",
+            "gssSSSSSSssg",
+            "gscWWWWWWcsg",
+            "gscWWWWWWcsg",
+            "gscWWWWWWcsg",
+            "gscWWWWWWcsg",
+            "gscWWWWWWcsg",
+            "gssSSSSSSssg",
+            "ggssssssssgg",
+            "gggssssssggg",
+            "gggggggggggg",
+        },
+        [Sprite.Power] = new[]
+        {
+            "gggggggggggg",
+            "ggkkkkkkkkgg",
+            "ggkSSSSSSkgg",
+            "ggkSyyyySkgg",
+            "ggkSyYYySkgg",
+            "ggkSSyySSkgg",
+            "ggkSyyyySkgg",
+            "ggkSSSSSSkgg",
+            "gghhkkkkhhgg",
+            "gghhhhhhhhgg",
+            "gghhhhhhhhgg",
+            "ghhgggggghhg",
+        },
+        [Sprite.Recycler] = new[]
+        {
+            "gggggggggggg",
+            "ggssssssssgg",
+            "gs1ssssss1sg",
+            "gss2ssss2ssg",
+            "gsss2ss2sssg",
+            "gssss22ssssg",
+            "gsss2ss2sssg",
+            "gss2ssss2ssg",
+            "gs1ssssss1sg",
+            "ggssssssssgg",
+            "gggggggggggg",
+            "ghgggggggGgg",
         },
     };
 

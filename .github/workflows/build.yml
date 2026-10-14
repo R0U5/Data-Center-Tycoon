@@ -1,0 +1,61 @@
+name: build-and-balance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (warnings as errors)
+        run: dotnet build -c Release --no-restore -warnaserror
+
+      - name: Economy + save/load self-test
+        run: dotnet run -c Release --no-build -- --sim --selftest
+
+      - name: Balance ladder (16 real maps per policy)
+        run: dotnet run -c Release --no-build -- --sim 16
+
+      - name: Headless render smoke test
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libgl1-mesa-dri libopenal1
+          xvfb-run -a dotnet run -c Release --no-build -- --shot /tmp/smoke.png --seed 1000 --days 30
+          test -s /tmp/smoke.png
+
+  package-linux:
+    runs-on: ubuntu-latest
+    needs: verify
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish self-contained Linux build
+        run: |
+          dotnet publish -c Release -r linux-x64 --self-contained true \
+            -p:PublishSingleFile=true -o Standalone-linux
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-tycoon-linux-x64
+          path: Standalone-linux/

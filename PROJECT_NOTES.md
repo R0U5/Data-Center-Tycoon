@@ -19,26 +19,32 @@ procedurally generated map. **Demand lives at the towns**: each town emits compu
 
 **The strategy space (this is the point of the game):**
 
-| Structure | Cost | Upkeep | Serves | Anger load | Notes |
-|---|---|---|---|---|---|
-| Server Shed | 12 | 1.0 | 1 | 1.0 | best ROI early; anger-inefficient (1.0 compute/load) |
-| Data Hall | 55 | 4.0 | 3 | 1.9 | 1.6 compute/load; hot — wants cooling |
-| Hyperscale | 170 | 12.0 | 7 | 3.4 | 2.1 compute/load; very hot; big capex |
-| Park | 20 | 0.4 | 0 | 0 | +3.0 comfort to its catchment town |
+| Structure | Cost | Upkeep | Serves | Anger load | Power | Notes |
+|---|---|---|---|---|---|---|
+| Server Shed | 12 | 1.0 | 1 | 1.0 | 0 | best ROI early; anger-inefficient (1.0 compute/load) |
+| Data Hall | 55 | 4.0 | 3 | 1.9 | 0 | 1.6 compute/load; hot — wants cooling |
+| Hyperscale | 170 | 12.0 | 7 | 3.4 | 2 | 2.1 compute/load; very hot; big capex |
+| Park | 20 | 0.4 | 0 | 0 | 0 | +3.0 comfort to its catchment town |
+| Cooling Tower | 90 | 3.0 | 0 | 0 | 1 | cools a 3x3 area to 55% upkeep; +1 comfort |
+| Power Plant | 130 | 2.0 | 0 | 2.2 | -22 | supplies 22 power to the grid; +anger |
+| E-Waste Recycler | 60 | 1.2 | 0 | 0.6 | 1 | $6/day passive income |
 
 - **Tiers answer the doom clock**: as demand outruns a town's comfort, you replace sheds with
   halls, then hyperscale — more compute per point of anger. Building over a cheaper structure
   upgrades in place (old one credited at 50%).
-- **Cooling gates the top tiers**: cooled tiles (within `CoolingRadius` of the river) pay 0.55x
-  upkeep. That's -0.45/day on a shed but -5.4/day on hyperscale, so cool riverfront is prime
-  real estate you want under your densest buildings.
+- **Cooling gates the top tiers**: cooled tiles (within `CoolingRadius` of the river, **or** inside
+  a Cooling Tower's 3x3 reach) pay 0.55x upkeep. That's -0.45/day on a shed but -5.4/day on
+  hyperscale, so cool riverfront is prime real estate.
+- **Power is opt-in late-game pressure**: sheds and halls are power-free; hyperscale and support
+  structures draw power. The shortfall penalty only applies **once you've built a plant** — an
+  off-grid player plays the original game untouched. Build plants before you over-build campuses.
 - **Parks buy tolerance**: each park raises its town's comfort by 3, at the cost of cash, upkeep,
-  and a catchment tile that can't serve. Late game is a land-allocation problem: hyperscale vs
-  parks on the remaining grass.
+  and a catchment tile that can't serve. Late game is a land-allocation problem.
 - **Forest is a reserve**: standing forest in a catchment cuts that town's NIMBY (≤20%); building
   on forest costs 2.5x and removes the buffer.
 - **Win = company VALUE** (cash + 50% of what you paid for standing structures) ≥ $16,000, so
-  reinvesting is always viable — no "stop building and idle" endgame.
+  reinvesting is always viable — no "stop building and idle" endgame. The win check fires both
+  when you build and when you advance the day.
 - **Lose** = happiness < 35 (revolt) or cash < 0 (bankrupt).
 
 This replaces three earlier designs (drag-rectangles toy → global footprint penalty → single
@@ -124,6 +130,12 @@ policy in the harness goes bankrupt on day 2 doing this.)
 
 ### Validated balance (run `dotnet run -- --sim`, 16 real maps)
 
+`--sim` now prints two sections: the **vanilla four-structure ladder** (the regression baseline,
+kept bit-for-bit identical to the pre-production-pass economy) and the **extended systems**
+ladder (power / cooling / recycler).
+
+Vanilla ladder:
+
 | Policy | Outcome |
 |---|---|
 | Naive sheds, chase demand | REVOLT 16/16, ~day 19 |
@@ -134,8 +146,18 @@ policy in the harness goes bankrupt on day 2 doing this.)
 | Tiered + parks, overpack 1.3 | WIN 2/16, REVOLT 14, ~day 26 |
 | Sprawl outside catchments | BANKRUPT 16/16, day 2 |
 
-Every rung of that ladder is a real strategy a player can discover: tier up, buy tolerance,
-claim the riverfront, ride as close to comfort as you dare.
+Extended systems:
+
+| Policy | Outcome |
+|---|---|
+| Skilled + cooling + power | REVOLT 16/16 (harness mis-builds the grid; player-facing feature) |
+| Cooling + power, no parks | REVOLT 16/16 |
+| Recycler economy | WIN 16/16, ~day 54 |
+
+Every rung of the vanilla ladder is a real strategy a player can discover: tier up, buy tolerance,
+claim the riverfront, ride as close to comfort as you dare. The key invariant to preserve: **a
+player who never builds a power plant experiences the exact original economy** — the power
+shortfall penalty only applies once a plant exists (`Sim.PowerShortfallActive`).
 
 ---
 
@@ -148,18 +170,21 @@ claim the riverfront, ride as close to comfort as you dare.
 | `START_MONEY` | 700 | Early-game tightness |
 | `WIN_CASH_GOAL` | 16000 | Net-worth goal; sits between the sheds-only ceiling (~10K) and the skilled reach |
 | `REFUND_FRACTION` | 0.5 | Refund on raze; also upgrade credit and the asset value in NetWorth |
-| `COOLED_OP_FACTOR` | 0.55 | Upkeep multiplier on cooled tiles |
+| `COOLED_OP_FACTOR` | 0.55 | Upkeep multiplier on cooled tiles (river ring **or** cooling-tower reach) |
 | `REVENUE_PER_SERVED` | 2.9 | Income per served compute unit |
 | `FOREST_BUILD_MULT` | 2.5 | Build-cost multiplier on forest |
 | `BASE_DEMAND` / `DAILY_DEMAND_GROWTH` | 100 / 0.055 | The doom clock |
-| `NIMBY_WEIGHT` / `NIMBY_EXP` | 15 / 2.6 | Crowding penalty scale / convexity (2.6 punishes 1.3x packing ~2.6x harder than 0.9x) |
+| `NIMBY_WEIGHT` / `NIMBY_EXP` | 15 / 2.6 | Crowding penalty scale / convexity |
 | `COMFORT_PER_SIZE` | 3.85 | Base comfort per town tile |
 | `BROWNOUT_WEIGHT` | 50 | How much under-serving hurts |
+| `POWER_SHORTFALL_PENALTY` | 40 | Morale hit when power demand exceeds supply (only active once a plant exists) |
 | `BUFFER_RELIEF` / `BUFFER_PER_SIZE` | 0.20 / 1.0 | Forest calming cap / forest per town tile for full effect |
 | `HAPPINESS_FALL` / `RISE` | 0.55 / 0.16 | Resentment fast, trust slow |
 | `HAPPINESS_LOSE` / `WARN` | 35 / 50 | Lose threshold / warning banner |
+| `SAVE_VERSION` | 4 | Current save format; older `v1`/`v2`/`v3` files upgrade on load |
 
-`Structures.cs`: per-structure `Cost / Upkeep / Compute / NimbyLoad / ComfortAdd` (table above).
+`Structures.cs`: per-structure `Cost / Upkeep / Compute / NimbyLoad / ComfortAdd / CoolingReach /
+PowerOutput / PowerDraw / PassiveIncome` (table above).
 `MapGenerator.cs`: `ServiceRadius` 6, `CoolingRadius` 2, `TileSize` 36, `TownSizes` {22,16,10}.
 
 **To re-tune**: edit the constants, run `dotnet run -- --sim`, and keep the ladder shape:
@@ -174,46 +199,55 @@ sprawl bankrupts. `--trace` prints the skilled policy day by day if something lo
 Program.cs        args: --sim|--shot -> harness/screenshot, else new Game1().Run()
 
 Sim.cs            THE GAME RULES. Pure, MonoGame-free (money, demand, happiness, day,
-                  per-tile StructureType/Paid grids, per-town aggregates, place/upgrade/
-                  demolish validation, AdvanceDay, win/lose, Serialize/Deserialize).
-Structures.cs     StructureType enum + StructureDef table (cost/upkeep/compute/load/comfort).
-BalanceHarness.cs Scripted policies (parameterised manager) played on real maps: the balance
-                  proof, a day-by-day trace, PlayDays (used by --shot), and --selftest.
+                  per-tile StructureType/Paid grids, per-town aggregates, power budget,
+                  local cooling grid, place/upgrade/demolish validation, AdvanceDay,
+                  win/lose, Serialize/Deserialize).
+Structures.cs     StructureType enum + StructureDef table (cost/upkeep/compute/load/comfort/
+                  cooling/power/passive-income) and the capability interfaces
+                  IServesDemand / ICalms / ICools / IPowers / IConsumesPower / IGeneratesValue.
+BalanceHarness.cs Two policy sets: the vanilla four-structure ladder (regression baseline)
+                  and extended power/cooling/recycler policies. Plus PlayDays (used by
+                  --shot), --trace, and --selftest.
 
-Game1.cs          Presentation + input only. Layout: map 1728x972 (48x27 @ 36px) top-left,
-                  192px sidebar right (title, stats, bars, tool palette, tool info, map key,
-                  hints), 108px bottom bar (one chip per town: served, crowding bar vs the
-                  1.0-comfort mark, forest relief, anger, parks). Toasts bottom-left of map.
-                  Drag preview with per-tile validity + cost. End screen, help overlay (H).
+Game1.cs          Presentation + input + scene graph. Renders to a fixed 1920x1080 render
+                  target and letterboxes to any window size (resizable). Main menu -> game ->
+                  end screen. Sidebar is grouped into FINANCE / MORALE / GRID chunks; bottom
+                  bar is one chip per town (dynamic width, not fixed 3). Hover tooltips,
+                  colourblind-safe mood glyphs, day-resolution ticker, undo stack (Z),
+                  tutorial prompts, stat-card end screen, help overlay (H).
+Music.cs          Generated chiptune loop (triangle-ish square wave) built at startup; no-ops
+                  safely with no audio device. Toggled with SFX via the M key / menu.
 PixelFont.cs      5x7 glyph bitmap font built into a texture at startup. No Font.xnb.
 PixelArt.cs       12x12 procedural sprites (grass, animated water, tree, houses, shed, hall,
-                  campus with blinking LEDs, park, raze icon) in one atlas. NES-ish palette.
-Sfx.cs            Square-wave PCM SoundEffects generated at startup (build/raze/deny/day/
-                  select/warn/win/lose). No-ops safely when no audio device exists.
+                  campus, park, cooling tower, power plant, recycler, raze icon) in one atlas.
+Sfx.cs            Square-wave PCM SoundEffects generated at startup.
 
 MapGenerator.cs   Perlin map: river, 2 forests, 3 towns; catchments (ServiceRadius BFS),
-                  cooling ring, considerate town placement (~97% fair maps). Unchanged logic.
+                  cooling ring, considerate town placement (~97% fair maps).
 Noise.cs          Hand-rolled 2D Perlin noise.
 ```
 
 **There is no content pipeline** — no `.mgcb`, no `mgcb` tool, no `Content/` folder, no Arial
-dependency. Everything is generated in code at startup. (The old prebuilt `Font.xnb` and its
-csproj wiring are gone.)
+dependency. Everything is generated in code at startup.
 
 ---
 
 ## Persistence
 
 - **File**: `save.dat` next to the executable; written on every build/raze/advance/reset.
-- **Format** (`v3`, line-based, invariant culture, produced/parsed by `Sim`):
+- **Format** (`v4`, line-based, invariant culture, produced/parsed by `Sim`):
   ```
-  v3
+  v4
   seed=<long> / day / money / demand / happiness / state=Playing|Won|Lost
+  reason=<end reason text, spaces escaped>
+  peak=<best value> / peakday / served=<best demand served> / structs=<peak structures>
   s=<x>,<y>,<structureTypeInt>,<paid>     (one per occupied tile)
   ```
-- **Legacy**: a bare-number file (seed-only) or a `v2` file both restore the same *map* and
-  start a fresh run on it. Any parse failure falls back to a new game.
-- Round-trip integrity is covered by `--sim --selftest`.
+- **Upgrade path**: `v1` (bare seed), `v2`, and `v3` files all load — `v1`/`v2` restore the same
+  *map* and start a fresh run; `v3` restores full state and is treated as `v4` with default
+  peak stats. Any parse failure falls back to a new game.
+- **Settings**: `settings.dat` next to the executable stores the sound toggle.
+- Round-trip integrity is covered by `--sim --selftest` (including the `v3`→`v4` upgrade case).
 
 ---
 
@@ -224,21 +258,26 @@ csproj wiring are gone.)
 - Game rules go in `Sim`/`Structures` (headless-testable), never in `Game1`.
 - Colors are `static readonly Color` at the top of `Game1.cs` / in `PixelArt.Palette`.
 - Tile coords `(x, y)`, `(0,0)` top-left. `MapGenerator.TileSize` = 36 (12px art @ 3x).
-- Don't add features the user didn't ask for. When they say "consider X", they want discussion,
-  not silent implementation.
+- The renderer targets a fixed `1920x1080` `RenderTarget2D` and letterboxes; **always convert
+  mouse coords through `ToVirtual()`** before hit-testing.
 - After balance-affecting changes, run `dotnet run -- --sim` and `--selftest`; for visual
   changes grab `xvfb-run -a dotnet run -- --shot ...` screenshots.
+- **Keep the vanilla ladder identical** unless deliberately re-tuning — it is the acceptance
+  test that the new systems didn't alter the original economy.
 
 ---
 
 ## Known issues / future work
 
-- **No music** — only SFX. A generated chiptune loop would fit `Sfx.cs`'s approach.
+- **`--shot` under xvfb** can return a mostly-black PNG when the GL surface isn't readable;
+  the game itself renders fine in a real window. Prefer manual screenshots for docs.
 - **No difficulty settings / endless mode** — the run ends at the value goal.
 - **~3% of seeds have one tighter town** (considerate generation guarantees the rest); reroll
   with `N`. A hard guarantee is possible if needed.
-- **Bottom-bar chips assume 3 towns** (`TownSizes` has 3); adding towns needs a chip-layout pass.
-- **Windowed 1920x1080 only** — no resolution scaling.
+- **Bottom-bar chips** size dynamically per town count but were tuned for 3; adding a 4th town
+  needs a quick layout check.
+- **Power grid balance** — the harness's power policies still lose; the feature is tuned for
+  player use, not the naive scripted manager. Revisit if a power-centric AI policy is wanted.
 
 ---
 
@@ -248,15 +287,19 @@ csproj wiring are gone.)
 |---|---|
 | Structure tiers (shed/hall/hyperscale) with per-tile `Compute` + `NimbyLoad` | The old single-type game had one dominant strategy ("fill to comfort, press Space"). Tiers make the doom clock answerable by *density* — a real decision each day. |
 | Parks add comfort | A second lever against NIMBY that consumes land + cash; late game becomes hyperscale-vs-parks land allocation. |
-| Win = net worth (cash + 50% asset value), $16,000 | Cash-goal made reinvestment irrational at endgame; net worth keeps building optimal to the last day. Goal sits between the sheds-only ceiling (~$10K) and skilled reach. |
+| Win = net worth (cash + 50% asset value), $16,000 | Cash-goal made reinvestment irrational at endgame; net worth keeps building optimal to the last day. |
 | Upgrade-in-place (build over cheaper structure, 50% credit) | Removes demolish-then-rebuild micro; makes the shed→hall→hyperscale arc smooth. |
 | NIMBY 15 * x^2.6 (was 14 * x^2.2) | Sharper convexity separates 0.9x (safe) / 1.1x (bold, usually wins) / 1.3x (2/16) packing. |
-| Revenue 2.7 → 2.9 | Shortens the skilled arc to ~52 days after the capex-heavy tier economy landed. |
-| Balance proven by scripted policies on real maps (`--sim`) | Replaced `tools/balance_sim.py`: no mirrored model to keep in sync; the harness runs the shipped `Sim`. |
+| Balance proven by scripted policies on real maps (`--sim`) | No mirrored model to keep in sync; the harness runs the shipped `Sim`. |
 | Sim/presentation split (`Sim.cs` vs `Game1.cs`) | Rules become headless-testable (harness, selftest, CI) and the renderer is swappable. |
-| Code-generated font/art/sfx; content pipeline deleted | Kills the fragile `Font.xnb`/mgcb/Arial dependency for good and gives a consistent 8-bit look. |
-| Layout: map + sidebar + bottom bar | Fixes the old "HUD overlaps the play area" issue; per-town chips surface the numbers that drive strategy (crowding vs comfort, forest relief, parks). |
-| `--shot` screenshot mode | Real-frame screenshots under xvfb for visual iteration and docs. |
+| Code-generated font/art/sfx/music | Kills the fragile content pipeline and gives a consistent 8-bit look. |
+| Fixed render target + letterbox scaling | Makes the game run at any resolution / resizable window (was 1920x1080-only). |
+| Win checked on build **and** on advance | Previously the win only fired when you pressed Space; crossing the goal by building now ends the run immediately. |
+| Capability interfaces on `StructureDef` | Adding structures no longer means editing a god-`switch` in `Sim`; `IServesDemand`/`ICalms`/`ICools`/`IPowers`/`IConsumesPower`/`IGeneratesValue` (pattern adapted from ProjectOST's `cInterfaces.verse`). |
+| Versioned save + end-reason persisted | Saves now carry the actual loss/win reason and peak stats; `v3` files upgrade cleanly. |
+| Power is **opt-in** (`PowerShortfallActive` requires a built plant) | Guarantees a player who ignores power plays the exact original economy — the vanilla ladder is unchanged. |
+| Undo stack (`Z`) | Razing drags at 50% refund was unforgiving; single-tile and single-drag undos are tracked. |
+| Hover tooltips + colourblind mood glyphs | Text-only, colour-only encoding was the biggest legibility problem for new and colourblind players. |
 
 ### Earlier iterations (superseded)
 
