@@ -299,13 +299,20 @@ public class Game1 : Game
         for (int i = 0; i < _menuButtons.Length; i++)
             if (_menuButtons[i].rect.Contains(v.X, v.Y)) _hover = i;
 
+        if (Pressed(keyboard, Keys.Down) || Pressed(keyboard, Keys.S))
+        { _hoverSel = (_hoverSel + 1) % _menuButtons.Length; _sfx.Play(Sound.Select, 0.3f); }
+        if (Pressed(keyboard, Keys.Up) || Pressed(keyboard, Keys.W))
+        { _hoverSel = (_hoverSel - 1 + _menuButtons.Length) % _menuButtons.Length; _sfx.Play(Sound.Select, 0.3f); }
+        if (_hover >= 0) _hoverSel = _hover;
+        _hover = _hoverSel;
+
         bool click = raw.LeftButton == ButtonState.Pressed && _prevMouse.LeftButton == ButtonState.Released;
-        if (click && _hover >= 0)
+        if ((click && _hover >= 0) || Pressed(keyboard, Keys.Enter))
         {
+            if (_hover < 0) _hover = _menuButtons.Length > 1 ? 0 : 0;
             _sfx.Play(Sound.Select, 0.4f);
             DoMenuAction(_menuButtons[_hover].action);
         }
-        else if (Pressed(keyboard, Keys.Enter)) DoMenuAction(File.Exists(SaveFileName) ? 0 : 1);
     }
 
     private void DoMenuAction(int action)
@@ -326,15 +333,30 @@ public class Game1 : Game
         for (int i = 0; i < _setupRects.Length; i++)
             if (_setupRects[i].rect.Contains(v.X, v.Y)) _setupHover = i;
 
+        if (Pressed(keyboard, Keys.Down) || Pressed(keyboard, Keys.S))
+        { _setupSel = (_setupSel + 1) % _setupRects.Length; _sfx.Play(Sound.Select, 0.3f); }
+        if (Pressed(keyboard, Keys.Up) || Pressed(keyboard, Keys.W))
+        { _setupSel = (_setupSel - 1 + _setupRects.Length) % _setupRects.Length; _sfx.Play(Sound.Select, 0.3f); }
+        if (Pressed(keyboard, Keys.Left) || Pressed(keyboard, Keys.A)) { CycleDifficulty(-1); _sfx.Play(Sound.Select, 0.35f); }
+        if (Pressed(keyboard, Keys.Right) || Pressed(keyboard, Keys.D)) { CycleDifficulty(1); _sfx.Play(Sound.Select, 0.35f); }
+        if (_setupHover >= 0) _setupSel = _setupHover;
+
         bool click = raw.LeftButton == ButtonState.Pressed && _prevMouse.LeftButton == ButtonState.Released;
         if (click && _setupHover >= 0)
         {
             _sfx.Play(Sound.Select, 0.4f);
             DoSetupAction(_setupRects[_setupHover].action);
         }
+        else if (Pressed(keyboard, Keys.Enter))
+        {
+            _sfx.Play(Sound.Select, 0.45f);
+            DoSetupAction(_setupRects[_setupSel].action);
+        }
         if (Pressed(keyboard, Keys.Escape)) _setupOpen = false;
-        if (Pressed(keyboard, Keys.Enter)) StartNewGame();
     }
+
+    private int _hoverSel;
+    private int _setupSel;
 
     private void DoSetupAction(int action)
     {
@@ -549,20 +571,26 @@ public class Game1 : Game
 
     private void DrawMenu()
     {
-        _font.Draw(_spriteBatch, "DATA", TargetWidth / 2 - 190, 180, TextGold, 10);
-        _font.Draw(_spriteBatch, "TYCOON", TargetWidth / 2 - 130, 290, TextCyan, 10);
-        DrawCentered("AN 8-BIT COMPUTE EMPIRE", 420, TextDim);
+        _font.Draw(_spriteBatch, "DATA", TargetWidth / 2 - 190, 150, TextGold, 10);
+        _font.Draw(_spriteBatch, "TYCOON", TargetWidth / 2 - 130, 260, TextCyan, 10);
+        DrawCentered("AN 8-BIT COMPUTE EMPIRE", 390, TextDim);
+
+        var panel = new Rectangle(TargetWidth / 2 - 260, TargetHeight / 2 - 130, 520, _menuButtons.Length * 50 + 40);
+        BevelPanel(panel, new Color(22, 24, 32), PanelLine, new Color(8, 8, 12));
+        FillRect(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, panel.Height - 8), ChunkFill);
 
         for (int i = 0; i < _menuButtons.Length; i++)
         {
             var b = _menuButtons[i];
-            bool hover = _hover == i;
-            FillRect(b.rect, hover ? new Color(44, 48, 66) : ChunkFill);
-            OutlineRect(b.rect, hover ? TextGold : PanelLine);
-            int tw = _font.Width(b.label, 3);
-            _font.Draw(_spriteBatch, b.label, b.rect.X + (b.rect.Width - tw) / 2, b.rect.Y + 16, hover ? Color.White : TextDim, 3);
+            bool sel = _hover == i;
+            int ty = b.rect.Y + 14;
+            if (sel) DrawCursor(b.rect.X - 34, ty, 3);
+            _font.Draw(_spriteBatch, b.label, b.rect.X, ty, sel ? TextGold : TextDim, 3);
         }
-        DrawCentered("CLICK A BUTTON OR PRESS ENTER", TargetHeight - 150, TextDim);
+
+        if (Blink)
+            DrawCentered("PRESS START", TargetHeight - 200, TextGreen);
+        DrawCentered("ARROWS OR MOUSE  +  ENTER TO SELECT", TargetHeight - 130, new Color(90, 96, 112));
     }
 
     private static string DifficultyName(Difficulty d) => d switch
@@ -583,30 +611,50 @@ public class Game1 : Game
 
     private void DrawSetup()
     {
-        _font.Draw(_spriteBatch, "NEW GAME", TargetWidth / 2 - 130, 150, TextGold, 6);
-        DrawCentered("CONFIGURE YOUR RUN", 240, TextDim);
+        var frame = new Rectangle(TargetWidth / 2 - 520, 90, 1040, TargetHeight - 210);
+        BevelPanel(frame, new Color(22, 24, 32), PanelLine, new Color(8, 8, 12));
+        FillRect(new Rectangle(frame.X + 4, frame.Y + 4, frame.Width - 8, frame.Height - 8), ChunkFill);
+
+        _font.Draw(_spriteBatch, "NEW GAME", TargetWidth / 2 - 130, 130, TextGold, 6);
+        DrawCentered("CONFIGURE YOUR OPERATION", 220, TextDim);
 
         var t = Sim.DifficultyTuning(_selDifficulty);
+        int cx = TargetWidth / 2;
 
-        DrawCentered($"DIFFICULTY: {DifficultyName(_selDifficulty)}", 400, Color.White);
-        DrawCentered(DifficultyBlurb(_selDifficulty), 430, TextDim);
-        DrawCentered($"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", 456, TextDim);
+        _font.Draw(_spriteBatch, "DIFFICULTY", cx - 420, 300, TextCyan, 2);
+        DrawCursor(cx - 250, 296, 2);
+        _font.Draw(_spriteBatch, $"< {DifficultyName(_selDifficulty)} >", cx - 226, 296, Color.White, 2);
+        _font.Draw(_spriteBatch, DifficultyBlurb(_selDifficulty), cx - 226, 332, TextDim);
+        _font.Draw(_spriteBatch, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", cx - 420, 360, TextDim);
 
-        DrawCentered($"SATIRICAL EVENTS: {(_selEvents ? "ON" : "OFF")}", 600, _selEvents ? TextGreen : TextDim);
-        DrawCentered(_selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", 626, TextDim);
+        _font.Draw(_spriteBatch, "EVENTS", cx - 420, 440, TextCyan, 2);
+        DrawCursor(cx - 250, 436, 2);
+        _font.Draw(_spriteBatch, _selEvents ? "[ ON ]" : "[ OFF ]", cx - 226, 436, _selEvents ? TextGreen : TextDim, 2);
+        _font.Draw(_spriteBatch, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", cx - 226, 472, TextDim);
 
-        for (int i = 0; i < _setupRects.Length; i++)
+        foreach (var s in _setupRects)
         {
-            var s = _setupRects[i];
-            bool hover = _setupHover == i;
-            bool toggleOn = s.action == 12 && _selEvents;
-            FillRect(s.rect, hover ? new Color(44, 48, 66) : ChunkFill);
-            OutlineRect(s.rect, hover ? TextGold : (toggleOn ? TextGreen : PanelLine));
-            int tw = _font.Width(s.label, 2);
-            _font.Draw(_spriteBatch, s.label, s.rect.X + (s.rect.Width - tw) / 2, s.rect.Y + (s.rect.Height - _font.Height(2)) / 2, hover ? Color.White : TextDim, 2);
+            bool sel = _setupSel >= 0 && _setupRects[_setupSel].action == s.action;
+            int tw = _font.Width(s.label, 3);
+            int tx = s.rect.X + (s.rect.Width - tw) / 2;
+            int ty = s.rect.Y + (s.rect.Height - _font.Height(3)) / 2;
+            if (s.action >= 13)
+            {
+                BevelPanel(s.rect, sel ? new Color(44, 48, 66) : new Color(30, 32, 42),
+                    sel ? TextGold : new Color(80, 86, 104), new Color(10, 10, 14));
+                if (sel) DrawCursor(s.rect.X - 34, ty, 3);
+                _font.Draw(_spriteBatch, s.label, tx, ty, sel ? Color.White : TextDim, 3);
+            }
+            else
+            {
+                if (sel) DrawCursor(s.rect.X - 30, s.rect.Y + 14, 2);
+                _font.Draw(_spriteBatch, s.label, tx, s.rect.Y + 14, sel ? TextWhiteOrGold() : TextDim, 2);
+            }
         }
-        DrawCentered("ESC BACK", TargetHeight - 90, TextDim);
+        DrawCentered("ARROWS MOVE / SELECT   ESC BACK", frame.Bottom - 44, new Color(90, 96, 112));
     }
+
+    private Color TextWhiteOrGold() => Color.White;
 
     private int AnimFrame => (int)(_animTime * 2f) % 2;
 
@@ -1178,6 +1226,23 @@ public class Game1 : Game
         _spriteBatch.Draw(_pixel, new Rectangle(rect.X, rect.Y + rect.Height - 1, rect.Width, 1), color);
         _spriteBatch.Draw(_pixel, new Rectangle(rect.X, rect.Y, 1, rect.Height), color);
         _spriteBatch.Draw(_pixel, new Rectangle(rect.X + rect.Width - 1, rect.Y, 1, rect.Height), color);
+    }
+
+    private void BevelPanel(Rectangle r, Color fill, Color light, Color dark)
+    {
+        FillRect(r, fill);
+        FillRect(new Rectangle(r.X, r.Y, r.Width, 2), light);
+        FillRect(new Rectangle(r.X, r.Y, 2, r.Height), light);
+        FillRect(new Rectangle(r.X, r.Y + r.Height - 2, r.Width, 2), dark);
+        FillRect(new Rectangle(r.X + r.Width - 2, r.Y, 2, r.Height), dark);
+    }
+
+    private bool Blink => (int)(_animTime * 3f) % 2 == 0;
+
+    private void DrawCursor(int x, int y, int scale = 2)
+    {
+        if (!Blink) return;
+        _font.Draw(_spriteBatch, ">", x, y, TextGold, scale);
     }
 
     private void SaveGame()
