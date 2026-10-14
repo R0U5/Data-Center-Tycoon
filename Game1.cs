@@ -357,6 +357,8 @@ public class Game1 : Game
 
     private int _hoverSel;
     private int _setupSel;
+    private string _lastScoreOutcome = "";
+    private int _lastScoreRank = -1;
 
     private void DoSetupAction(int action)
     {
@@ -483,8 +485,8 @@ public class Game1 : Game
         _tickerText = $"DAY {_sim.Day}   REVENUE {Money(_sim.LastRevenue)}   UPKEEP {Money(-_sim.LastOpCost)}   NET {sign}{Money(_sim.LastNet)}";
         _tickerUntil = _clock + 3.4f;
 
-        if (_sim.State == RunState.Won) { _sfx.Play(Sound.Win, 0.7f); _screen = Screen.Ended; }
-        else if (_sim.State == RunState.Lost) { _sfx.Play(Sound.Lose, 0.7f); _screen = Screen.Ended; }
+        if (_sim.State == RunState.Won) { _sfx.Play(Sound.Win, 0.7f); FinishRun(); }
+        else if (_sim.State == RunState.Lost) { _sfx.Play(Sound.Lose, 0.7f); FinishRun(); }
         else if (_sim.Happiness < Sim.HAPPINESS_WARN && !_warned)
         {
             _warned = true;
@@ -494,6 +496,29 @@ public class Game1 : Game
         else if (_sim.Happiness >= Sim.HAPPINESS_WARN + 8f) _warned = false;
 
         SaveGame();
+    }
+
+    private void FinishRun()
+    {
+        _screen = Screen.Ended;
+        if (_shotPath != null) return;
+
+        var score = new Score
+        {
+            Value = _sim.NetWorth,
+            Day = _sim.Day,
+            Structures = _sim.StructureTiles,
+            Difficulty = DifficultyName(_sim.Difficulty),
+            Outcome = _sim.State == RunState.Won ? "WIN" : (Money(_sim.NetWorth).Length > 0 ? "LOSS" : "LOSS"),
+        };
+        bool isHigh = HighScores.IsHighScore(score.Value);
+        HighScores.Submit(score);
+        _lastScoreOutcome = score.Outcome;
+        var list = HighScores.Load();
+        _lastScoreRank = -1;
+        for (int i = 0; i < list.Count; i++)
+            if (Math.Abs(list[i].Value - score.Value) < 0.5f && list[i].Day == score.Day) { _lastScoreRank = i + 1; break; }
+        if (isHigh) Toast("NEW HIGH SCORE!", TextGold);
     }
 
     private void Toast(string text, Color color)
@@ -591,6 +616,11 @@ public class Game1 : Game
         if (Blink)
             DrawCentered("PRESS START", TargetHeight - 200, TextGreen);
         DrawCentered("ARROWS OR MOUSE  +  ENTER TO SELECT", TargetHeight - 130, new Color(90, 96, 112));
+        DrawCentered("© 2026 GOBLIN SOFTWORKS      ALL RIGHTS RESERVED", TargetHeight - 60, new Color(70, 74, 90));
+
+        var hs = HighScores.Load();
+        if (hs.Count > 0)
+            _font.Draw(_spriteBatch, $"HI {ShortMoney(hs[0].Value)}", 24, 24, TextGold);
     }
 
     private static string DifficultyName(Difficulty d) => d switch
@@ -831,20 +861,21 @@ public class Game1 : Game
 
     private int DrawChunk(int x, int y, string title, (string text, Color color)[] lines, float bar = -1f, Color? barColor = null, float markFrac = -1f)
     {
-        int h = 22 + lines.Length * 17 + (bar >= 0f ? 14 : 4);
-        var panel = new Rectangle(x, y, SideW - 20, h);
-        FillRect(panel, ChunkFill);
-        OutlineRect(panel, PanelLine);
-        _font.Draw(_spriteBatch, title, x + 8, y + 5, TextDim);
-        int ly = y + 22;
+        int h = 26 + lines.Length * 17 + (bar >= 0f ? 14 : 4);
+        var panel = new Rectangle(x, y, SideW - 24, h);
+        BevelPanel(panel, new Color(22, 24, 32), PanelLine, new Color(8, 8, 12));
+        FillRect(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, panel.Height - 8), ChunkFill);
+        FillRect(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, 16), new Color(38, 42, 56));
+        _font.Draw(_spriteBatch, title, panel.X + 10, panel.Y + 7, TextCyan);
+        int ly = panel.Y + 26;
         foreach (var (text, color) in lines)
         {
-            _font.Draw(_spriteBatch, text, x + 8, ly, color);
+            _font.Draw(_spriteBatch, text, panel.X + 10, ly, color);
             ly += 17;
         }
         if (bar >= 0f)
         {
-            var barRect = new Rectangle(x + 8, ly + 2, SideW - 36, 8);
+            var barRect = new Rectangle(panel.X + 10, ly + 2, panel.Width - 20, 8);
             DrawBar(barRect, bar, barColor ?? TextGold);
             if (markFrac >= 0f)
             {
@@ -857,21 +888,25 @@ public class Game1 : Game
 
     private void DrawSidebar()
     {
-        FillRect(new Rectangle(SideX, 0, SideW, TargetHeight), PanelColor);
-        FillRect(new Rectangle(SideX, 0, 2, TargetHeight), PanelLine);
+        FillRect(new Rectangle(SideX, 0, SideW, TargetHeight), BgColor);
+        FillRect(new Rectangle(SideX, 0, 3, TargetHeight), PanelLine);
+        FillRect(new Rectangle(SideX + 3, 0, 1, TargetHeight), new Color(8, 8, 12));
 
-        int x = SideX + 10;
+        int x = SideX + 12;
         int y = 12;
-        _font.Draw(_spriteBatch, "DATA", x, y, TextGold, 3);
-        _font.Draw(_spriteBatch, "TYCOON", x + 44, y + 24, TextCyan, 3);
+
+        var logoFrame = new Rectangle(x, y, SideW - 24, 48);
+        BevelPanel(logoFrame, new Color(22, 24, 32), PanelLine, new Color(8, 8, 12));
+        _font.Draw(_spriteBatch, "DATA", logoFrame.X + 14, logoFrame.Y + 8, TextGold, 3);
+        _font.Draw(_spriteBatch, "TYCOON", logoFrame.X + 14, logoFrame.Y + 26, TextCyan, 3);
         y += 58;
 
         y = DrawChunk(x, y, "FINANCE", new (string, Color)[]
         {
             ($"DAY {_sim.Day}", Color.White),
             ($"CASH {ShortMoney(_sim.Money)}", Color.White),
-            ($"VALUE {ShortMoney(_sim.NetWorth)} / {ShortMoney(Sim.WIN_CASH_GOAL)}", TextGold),
-        }, bar: _sim.NetWorth / Sim.WIN_CASH_GOAL, barColor: TextGold);
+            ($"VALUE {ShortMoney(_sim.NetWorth)} / {ShortMoney(_sim.EffectiveWinGoal)}", TextGold),
+        }, bar: _sim.NetWorth / _sim.EffectiveWinGoal, barColor: TextGold);
 
         Color hColor = HappinessColor(_sim.Happiness);
         float proj = _sim.ProjectedHappiness();
@@ -901,29 +936,35 @@ public class Game1 : Game
             if (Math.Abs(_sim.EvUpkeepMult - 1f) > 0.0001f) mods.Add(($"UPKEEP x{_sim.EvUpkeepMult:F2}", _sim.EvUpkeepMult <= 1f ? TextGreen : TextRed));
             if (Math.Abs(_sim.EvBuildCostMult - 1f) > 0.0001f) mods.Add(($"BUILD x{_sim.EvBuildCostMult:F2}", _sim.EvBuildCostMult <= 1f ? TextGreen : TextRed));
             if (Math.Abs(_sim.EvNimbyMult - 1f) > 0.0001f) mods.Add(($"ANGER x{_sim.EvNimbyMult:F2}", _sim.EvNimbyMult <= 1f ? TextGreen : TextRed));
-            if (mods.Count > 0) y = DrawChunk(x, y, "ACTIVE EVENTS", mods.ToArray());
+            if (mods.Count > 0) y = DrawChunk(x, y, "NEWS CYCLE", mods.ToArray());
         }
 
-        int by = 360;
-        _font.Draw(_spriteBatch, "BUILD", x, by - 20, TextDim);
+        DrawBuildPalette(x, y);
+    }
+
+    private void DrawBuildPalette(int x, int y)
+    {
+        int headY = y + 4;
+        _font.Draw(_spriteBatch, "BUILD", x + 6, headY, TextDim);
+        int listY = headY + 20;
         for (int i = 0; i < ToolDefs.Length; i++)
         {
             var (tool, type, icon, key) = ToolDefs[i];
             var r = ToolButtonRect(tool);
             bool selected = _tool == tool;
             bool hover = _hoverTooltip == i;
-            FillRect(r, selected ? new Color(44, 48, 66) : (hover ? new Color(38, 40, 52) : ChunkFill));
-            OutlineRect(r, selected ? TextGold : PanelLine);
+            BevelPanel(r, selected ? new Color(46, 50, 68) : ChunkFill,
+                selected ? TextGold : new Color(72, 78, 96), new Color(8, 8, 12));
+            if (selected) DrawCursor(r.X - 22, r.Y + 11, 2);
             _spriteBatch.Draw(_art.Atlas, new Rectangle(r.X + 3, r.Y + 3, 32, 32), _art.Src(icon), Color.White);
             string name = Structures.Display(type);
-            _font.Draw(_spriteBatch, $"{key} {name}", r.X + 42, r.Y + 5, selected ? Color.White : TextDim);
+            _font.Draw(_spriteBatch, $"{key} {name}", r.X + 42, r.Y + 5, selected ? Color.White : (hover ? Color.White : TextDim));
             string sub = type != StructureType.None ? ShortMoney(Structures.Get(type).Cost) : "50% BACK";
             _font.Draw(_spriteBatch, sub, r.X + 42, r.Y + 21, selected ? TextGold : TextDim);
         }
 
-        int iy = ToolButtonRect(Tool.Raze).Bottom + 12;
-        FillRect(new Rectangle(x, iy - 6, SideW - 20, 1), PanelLine);
-        DrawToolInfo(x, iy);
+        int iy = ToolButtonRect(Tool.Raze).Bottom + 14;
+        DrawToolInfo(x + 6, iy);
     }
 
     private void DrawToolInfo(int x, int y)
@@ -952,36 +993,37 @@ public class Game1 : Game
 
     private void DrawBottomBar(Point v)
     {
-        FillRect(new Rectangle(0, MapH, MapW, TargetHeight - MapH), PanelColor);
-        FillRect(new Rectangle(0, MapH, MapW, 2), PanelLine);
+        FillRect(new Rectangle(0, MapH, MapW, TargetHeight - MapH), BgColor);
+        FillRect(new Rectangle(0, MapH, MapW, 3), PanelLine);
+        FillRect(new Rectangle(0, MapH + 3, MapW, 1), new Color(8, 8, 12));
 
         var map = _sim.Map;
         int towns = map.Towns.Count;
         int chipGap = 12;
         int chipW = Math.Max(360, (MapW - chipGap * (towns + 1)) / Math.Max(1, towns));
-        int chipH = TargetHeight - MapH - 20;
+        int chipH = TargetHeight - MapH - (chipGap + 10);
         for (int i = 0; i < towns; i++)
         {
             var t = map.Towns[i];
             int cx = chipGap + i * (chipW + chipGap);
             int cy = MapH + 10;
             var chip = new Rectangle(cx, cy, chipW, chipH);
-            FillRect(chip, ChunkFill);
-            OutlineRect(chip, PanelLine);
-            FillRect(new Rectangle(cx, cy, 4, chipH), TownTints[i % TownTints.Length]);
+            BevelPanel(chip, new Color(22, 24, 32), PanelLine, new Color(8, 8, 12));
+            FillRect(new Rectangle(chip.X + 4, chip.Y + 4, chip.Width - 8, chip.Height - 8), ChunkFill);
+            FillRect(new Rectangle(chip.X + 4, chip.Y + 4, 4, chip.Height - 8), TownTints[i % TownTints.Length]);
 
             float dem = _sim.DemandForTown(t.Id);
             float served = Math.Min(dem, _sim.TownCompute(t.Id));
             float ratio = _sim.TownLoadRatio(t.Id);
 
-            _font.Draw(_spriteBatch, TownName(t.Id), cx + 14, cy + 8, Color.White);
+            _font.Draw(_spriteBatch, TownName(t.Id), cx + 16, cy + 8, Color.White);
             string srv = $"SRV {served:F0}/{dem:F0}";
             _font.Draw(_spriteBatch, srv, cx + chipW - 260, cy + 8, served >= dem - 0.5f ? TextGreen : TextOrange);
             string mood = MoodWord(ratio);
             _font.Draw(_spriteBatch, mood, cx + chipW - 120, cy + 8, MoodColor(ratio));
             DrawMoodGlyph(new Rectangle(cx + chipW - 26, cy + 8, 10, 10), ratio <= 0.85f);
 
-            _font.Draw(_spriteBatch, $"CROWDING {ratio * 100f:F0}%", cx + 14, cy + 34, TextDim);
+            _font.Draw(_spriteBatch, $"CROWDING {ratio * 100f:F0}%", cx + 16, cy + 34, TextDim);
             var bar = new Rectangle(cx + chipW - 260, cy + 38, 220, 8);
             DrawBar(bar, Math.Min(1f, ratio / 1.3f), MoodColor(ratio));
             int comfortMark = bar.X + (int)(bar.Width / 1.3f);
@@ -990,7 +1032,7 @@ public class Game1 : Game
             if (relief > 0.001f)
                 _font.Draw(_spriteBatch, $"FOREST -{relief * 100f:F0}%", cx + chipW - 120, cy + 34, TextGreen);
 
-            _font.Draw(_spriteBatch, $"COMFORT {_sim.TownComfort(t.Id):F0}", cx + 14, cy + 58, TextDim);
+            _font.Draw(_spriteBatch, $"COMFORT {_sim.TownComfort(t.Id):F0}", cx + 16, cy + 58, TextDim);
             _font.Draw(_spriteBatch, $"ANGER {_sim.TownNimby(t.Id):F1}", cx + chipW - 260, cy + 58, ratio > 1f ? TextRed : TextDim);
             int parks = (int)(_sim.TownParkComfort(t.Id) / Structures.Park.ComfortAdd + 0.5f);
             if (parks > 0) _font.Draw(_spriteBatch, $"PARKS {parks}", cx + chipW - 120, cy + 58, TextGreen);
@@ -1166,35 +1208,78 @@ public class Game1 : Game
         Color titleColor = won ? TextGold : TextRed;
         int scale = 8;
         int tw = _font.Width(title, scale);
-        _font.Draw(_spriteBatch, title, (TargetWidth - tw) / 2, 200, titleColor, scale);
+        _font.Draw(_spriteBatch, title, (TargetWidth - tw) / 2, 120, titleColor, scale);
 
-        DrawCentered(_sim.EndReason, 340, Color.White);
+        if (Blink && _sim.State == RunState.Won)
+            DrawCentered("CONGRATULATIONS", 210, TextGold);
+        DrawCentered(_sim.EndReason, 250, Color.White);
 
-        int pw = 720, ph = 240;
-        var card = new Rectangle((TargetWidth - pw) / 2, 400, pw, ph);
-        FillRect(card, ChunkFill);
-        OutlineRect(card, PanelLine);
-        int cx = card.X + 30, cy = card.Y + 24;
-        _font.Draw(_spriteBatch, "FINAL TALLY", cx, cy, TextGold, 2); cy += 40;
+        int pw = 620, ph = 250;
+        var card = new Rectangle((TargetWidth - pw) / 2 - 330, 300, pw, ph);
+        BevelPanel(card, new Color(22, 24, 32), PanelLine, new Color(8, 8, 12));
+        FillRect(new Rectangle(card.X + 4, card.Y + 4, card.Width - 8, 18), new Color(38, 42, 56));
+        _font.Draw(_spriteBatch, "FINAL TALLY", card.X + 12, card.Y + 7, TextCyan);
+        int cx = card.X + 20, cy = card.Y + 34;
 
-        int parks = (int)((_sim.TownParkComfort(0) + _sim.TownParkComfort(Math.Max(0, _sim.Map.Towns.Count - 1))) / Structures.Park.ComfortAdd + 0.5f);
         var rows = new (string, string)[]
         {
+            ("DIFFICULTY", DifficultyName(_sim.Difficulty)),
             ("DAYS SURVIVED", $"{_sim.Day}"),
             ("FINAL VALUE", Money(_sim.NetWorth)),
             ("PEAK VALUE", $"{Money(_sim.PeakValue)} (DAY {_sim.PeakDay})"),
-            ("STRUCTURES BUILT", $"{_sim.StructureTiles}  (PEAK {_sim.PeakStructures})"),
-            ("BEST DEMAND SERVED", $"{_sim.PeakDemandServed}"),
+            ("STRUCTURES", $"{_sim.StructureTiles}  (PEAK {_sim.PeakStructures})"),
+            ("BEST SERVED", $"{_sim.PeakDemandServed}"),
             ("FINAL HAPPINESS", $"{_sim.Happiness:F0}"),
         };
         foreach (var (label, value) in rows)
         {
             _font.Draw(_spriteBatch, label, cx, cy, TextDim);
-            _font.Draw(_spriteBatch, value, cx + 360, cy, Color.White);
-            cy += 26;
+            _font.Draw(_spriteBatch, value, cx + 300, cy, Color.White);
+            cy += 24;
         }
 
-        DrawCentered("R RETRY THIS REGION      N NEW REGION      ESC MENU", 700, TextGold);
+        DrawHighScoreTable(new Rectangle((TargetWidth - pw) / 2 + 330, 300, pw, ph));
+
+        DrawSaveIndicator();
+        DrawCentered("R RETRY THIS REGION      N NEW REGION      ESC MENU", TargetHeight - 110, TextGold);
+    }
+
+    private void DrawHighScoreTable(Rectangle panel)
+    {
+        BevelPanel(panel, new Color(22, 24, 32), PanelLine, new Color(8, 8, 12));
+        FillRect(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, 18), new Color(38, 42, 56));
+        _font.Draw(_spriteBatch, "TOP OPERATORS", panel.X + 12, panel.Y + 7, TextCyan);
+
+        var scores = HighScores.Load();
+        int cy = panel.Y + 36;
+        bool isTop = !string.IsNullOrEmpty(_lastScoreOutcome);
+        int rank = 1;
+        for (int i = 0; i < scores.Count; i++)
+        {
+            var s = scores[i];
+            bool mine = isTop && rank == _lastScoreRank;
+            Color c = mine ? TextGold : TextDim;
+            _font.Draw(_spriteBatch, $"{i + 1}.", panel.X + 12, cy, c);
+            _font.Draw(_spriteBatch, ShortMoney(s.Value), panel.X + 44, cy, c);
+            _font.Draw(_spriteBatch, $"{s.Difficulty,-8}", panel.X + 150, cy, c);
+            _font.Draw(_spriteBatch, s.Outcome, panel.X + 302, cy, c);
+            cy += 22;
+            rank++;
+        }
+        if (scores.Count == 0)
+            _font.Draw(_spriteBatch, "NO RUNS RECORDED", panel.X + 12, cy, TextDim);
+    }
+
+    private void DrawSaveIndicator()
+    {
+        if (!Blink) return;
+        string text = "SAVED";
+        int w = _font.Width(text) + 20;
+        var r = new Rectangle(TargetWidth - w - 24, 24, w, 28);
+        FillRect(r, new Color(10, 10, 16) * 0.85f);
+        OutlineRect(r, TextGreen);
+        FillRect(new Rectangle(r.X + 6, r.Y + 10, 8, 8), TextGreen);
+        _font.Draw(_spriteBatch, text, r.X + 20, r.Y + 9, TextGreen);
     }
 
     private void DrawCentered(string text, int y, Color color)
