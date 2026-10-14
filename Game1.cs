@@ -99,6 +99,14 @@ public class Game1 : Game
 
     private MenuButton[] _menuButtons = Array.Empty<MenuButton>();
 
+    private enum Screen2 { Title, Setup }
+    private Difficulty _selDifficulty = Difficulty.Standard;
+    private bool _selEvents;
+    private bool _setupOpen;
+    private readonly record struct SetupRect(string label, Rectangle rect, int action);
+    private SetupRect[] _setupRects = Array.Empty<SetupRect>();
+    private int _setupHover = -1;
+
     public Game1(string shotPath = null, long? shotSeed = null, int shotDays = 0)
     {
         _shotPath = shotPath;
@@ -152,19 +160,35 @@ public class Game1 : Game
     private void BuildMenuButtons()
     {
         int w = 440, h = 56, cx = TargetWidth / 2 - w / 2;
-        int y = TargetHeight / 2 - 70;
+        int y = TargetHeight / 2 - 100;
         var list = new List<MenuButton>();
         if (File.Exists(SaveFileName))
         {
             list.Add(new MenuButton("CONTINUE", new Rectangle(cx, y, w, h), 0));
-            y += h + 18;
+            y += h + 16;
         }
         list.Add(new MenuButton("NEW GAME", new Rectangle(cx, y, w, h), 1));
-        y += h + 18;
+        y += h + 16;
         list.Add(new MenuButton(_soundOn ? "SOUND: ON" : "SOUND: OFF", new Rectangle(cx, y, w, h), 2));
-        y += h + 18;
+        y += h + 16;
         list.Add(new MenuButton("QUIT", new Rectangle(cx, y, w, h), 3));
         _menuButtons = list.ToArray();
+        BuildSetupRects();
+    }
+
+    private void BuildSetupRects()
+    {
+        int w = 360, h = 52, cx = TargetWidth / 2 - w / 2;
+        int y = 470;
+        var list = new List<SetupRect>();
+        list.Add(new SetupRect("EASIER", new Rectangle(cx - 190, y, 120, h), 10));
+        list.Add(new SetupRect("HARDER", new Rectangle(cx + 190 - 120 + 250, y, 120, h), 11));
+        y += h + 18;
+        list.Add(new SetupRect("TOGGLE EVENTS", new Rectangle(cx, y, w, h), 12));
+        y += h + 18;
+        list.Add(new SetupRect("START", new Rectangle(cx, y + 12, w, 60), 13));
+        list.Add(new SetupRect("BACK", new Rectangle(60, TargetHeight - 90, 160, 52), 14));
+        _setupRects = list.ToArray();
     }
 
     private void ApplySoundState()
@@ -176,6 +200,7 @@ public class Game1 : Game
     private void StartNewGame()
     {
         _sim = new Sim(new MapGenerator(Environment.TickCount64));
+        _sim.Configure(_selDifficulty, _selEvents);
         _warned = false;
         _toasts.Clear();
         _undo.Clear();
@@ -196,7 +221,10 @@ public class Game1 : Game
 
     private void RetryMap()
     {
+        var d = _sim.Difficulty;
+        bool ev = _sim.EventsOptIn;
         _sim = new Sim(new MapGenerator(_sim.Map.Seed));
+        _sim.Configure(d, ev);
         _warned = false;
         _toasts.Clear();
         _undo.Clear();
@@ -218,7 +246,8 @@ public class Game1 : Game
 
         if (_screen == Screen.Menu)
         {
-            UpdateMenu(v, mouse, keyboard);
+            if (_setupOpen) UpdateSetup(v, mouse, keyboard);
+            else UpdateMenu(v, mouse, keyboard);
             _prevMouse = mouse;
             _prevKeyboard = keyboard;
             base.Update(gameTime);
@@ -284,11 +313,46 @@ public class Game1 : Game
         switch (action)
         {
             case 0: ContinueGame(); break;
-            case 1: StartNewGame(); break;
+            case 1: _setupOpen = true; break;
             case 2: _soundOn = !_soundOn; ApplySoundState(); SaveSettings(); BuildMenuButtons(); break;
             case 3: Exit(); break;
         }
         _tutorialSeen = true;
+    }
+
+    private void UpdateSetup(Point v, MouseState raw, KeyboardState keyboard)
+    {
+        _setupHover = -1;
+        for (int i = 0; i < _setupRects.Length; i++)
+            if (_setupRects[i].rect.Contains(v.X, v.Y)) _setupHover = i;
+
+        bool click = raw.LeftButton == ButtonState.Pressed && _prevMouse.LeftButton == ButtonState.Released;
+        if (click && _setupHover >= 0)
+        {
+            _sfx.Play(Sound.Select, 0.4f);
+            DoSetupAction(_setupRects[_setupHover].action);
+        }
+        if (Pressed(keyboard, Keys.Escape)) _setupOpen = false;
+        if (Pressed(keyboard, Keys.Enter)) StartNewGame();
+    }
+
+    private void DoSetupAction(int action)
+    {
+        switch (action)
+        {
+            case 10: CycleDifficulty(-1); break;
+            case 11: CycleDifficulty(1); break;
+            case 12: _selEvents = !_selEvents; break;
+            case 13: StartNewGame(); break;
+            case 14: _setupOpen = false; break;
+        }
+    }
+
+    private void CycleDifficulty(int dir)
+    {
+        int d = (int)_selDifficulty + dir;
+        int max = Enum.GetValues<Difficulty>().Length - 1;
+        _selDifficulty = (Difficulty)Math.Clamp(d, 0, max);
     }
 
     private bool Pressed(KeyboardState kb, Keys key) => kb.IsKeyDown(key) && !_prevKeyboard.IsKeyDown(key);
@@ -438,7 +502,11 @@ public class Game1 : Game
         GraphicsDevice.Clear(BgColor);
         _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
 
-        if (_screen == Screen.Menu) DrawMenu();
+        if (_screen == Screen.Menu)
+        {
+            if (_setupOpen) DrawSetup();
+            else DrawMenu();
+        }
         else
         {
             var v = ToVirtual(Mouse.GetState());
@@ -495,6 +563,49 @@ public class Game1 : Game
             _font.Draw(_spriteBatch, b.label, b.rect.X + (b.rect.Width - tw) / 2, b.rect.Y + 16, hover ? Color.White : TextDim, 3);
         }
         DrawCentered("CLICK A BUTTON OR PRESS ENTER", TargetHeight - 150, TextDim);
+    }
+
+    private static string DifficultyName(Difficulty d) => d switch
+    {
+        Difficulty.Relaxed => "RELAXED",
+        Difficulty.Standard => "STANDARD",
+        Difficulty.Hard => "HARD",
+        _ => "BRUTAL",
+    };
+
+    private static string DifficultyBlurb(Difficulty d) => d switch
+    {
+        Difficulty.Relaxed => "MORE START CASH, GENTLER DEMAND, FORGIVING ANGER.",
+        Difficulty.Standard => "THE CALIBRATED GAME. WINS ARE EARNED.",
+        Difficulty.Hard => "LESS CASH, FASTER DEMAND, TOUCHIER NEIGHBOURS.",
+        _ => "BARELY ANY CASH. THE TOWNS HATE YOU. GOOD LUCK.",
+    };
+
+    private void DrawSetup()
+    {
+        _font.Draw(_spriteBatch, "NEW GAME", TargetWidth / 2 - 130, 150, TextGold, 6);
+        DrawCentered("CONFIGURE YOUR RUN", 240, TextDim);
+
+        var t = Sim.DifficultyTuning(_selDifficulty);
+
+        DrawCentered($"DIFFICULTY: {DifficultyName(_selDifficulty)}", 400, Color.White);
+        DrawCentered(DifficultyBlurb(_selDifficulty), 430, TextDim);
+        DrawCentered($"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", 456, TextDim);
+
+        DrawCentered($"SATIRICAL EVENTS: {(_selEvents ? "ON" : "OFF")}", 600, _selEvents ? TextGreen : TextDim);
+        DrawCentered(_selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", 626, TextDim);
+
+        for (int i = 0; i < _setupRects.Length; i++)
+        {
+            var s = _setupRects[i];
+            bool hover = _setupHover == i;
+            bool toggleOn = s.action == 12 && _selEvents;
+            FillRect(s.rect, hover ? new Color(44, 48, 66) : ChunkFill);
+            OutlineRect(s.rect, hover ? TextGold : (toggleOn ? TextGreen : PanelLine));
+            int tw = _font.Width(s.label, 2);
+            _font.Draw(_spriteBatch, s.label, s.rect.X + (s.rect.Width - tw) / 2, s.rect.Y + (s.rect.Height - _font.Height(2)) / 2, hover ? Color.White : TextDim, 2);
+        }
+        DrawCentered("ESC BACK", TargetHeight - 90, TextDim);
     }
 
     private int AnimFrame => (int)(_animTime * 2f) % 2;

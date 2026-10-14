@@ -200,6 +200,30 @@ difficulty bump for players who want it, with zero effect on the base game.
 
 ---
 
+## Menus, difficulty, and the events toggle
+
+The title screen offers **Continue / New Game / Sound / Quit**. **New Game** opens a setup screen:
+
+- **Difficulty** — cycle **Relaxed / Standard / Hard / Brutal**. Each preset retunes start cash,
+  win goal, demand growth, NIMBY weight, and revenue (see `Sim.DifficultyTuning`). Standard is the
+  calibrated baseline and is byte-identical to the historical ladder.
+- **Satirical events** — an ON/OFF toggle (default OFF). Turning it on enables the "news cycle".
+- **START / BACK** — begin the run, or return to the title.
+
+The difficulty and events choices are stored in the save (`difficulty=` / `events=` keys, format
+`v5`), so Continue restores the exact run you configured, and R (retry map) keeps them.
+
+Difficulty ladder (`--sim`, skilled policy, events off):
+
+| Difficulty | Outcome |
+|---|---|
+| Relaxed | WIN 16/16, day 41, peak ~$13.5K |
+| **Standard** | **WIN 16/16, day 52, peak ~$16.5K** (baseline) |
+| Hard | WIN 1/16, day 82, peak ~$15.7K |
+| Brutal | WIN 0/16, day 68, peak ~$10.9K |
+
+---
+
 ## Tunable constants
 
 `Sim.cs`:

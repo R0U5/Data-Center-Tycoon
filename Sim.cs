@@ -8,6 +8,8 @@ namespace DataCenterTycoon;
 
 public enum RunState { Playing, Won, Lost }
 
+public enum Difficulty { Relaxed, Standard, Hard, Brutal }
+
 public class Sim
 {
     public const float START_MONEY = 700f;
@@ -28,10 +30,41 @@ public class Sim
     public const float HAPPINESS_RISE = 0.16f;
     public const float HAPPINESS_LOSE = 35f;
     public const float HAPPINESS_WARN = 50f;
-    public const int SAVE_VERSION = 4;
+    public const int SAVE_VERSION = 5;
 
     public const float POWER_SHORTFALL_PENALTY = 40f;
     public const float POWER_SHORTFALL_EXP = 0.6f;
+
+    public Difficulty Difficulty { get; private set; } = Difficulty.Standard;
+    public bool EventsOptIn { get; private set; }
+
+    public float DiffStartMoneyMult { get; private set; } = 1f;
+    public float DiffWinGoalMult { get; private set; } = 1f;
+    public float DiffDemandGrowthDelta { get; private set; }
+    public float DiffNimbyMult { get; private set; } = 1f;
+    public float DiffRevenueMult { get; private set; } = 1f;
+    public float EffectiveWinGoal => WIN_CASH_GOAL * DiffWinGoalMult;
+
+    public static (float startMoney, float winGoal, float growthDelta, float nimby, float revenue) DifficultyTuning(Difficulty d) => d switch
+    {
+        Difficulty.Relaxed => (950f, 13000f, -0.010f, 0.80f, 1.12f),
+        Difficulty.Standard => (700f, 16000f, 0.000f, 1.00f, 1.00f),
+        Difficulty.Hard => (550f, 19000f, 0.010f, 1.18f, 0.92f),
+        _ => (420f, 23000f, 0.020f, 1.40f, 0.85f),
+    };
+
+    public void Configure(Difficulty difficulty, bool eventsOptIn)
+    {
+        Difficulty = difficulty;
+        EventsOptIn = eventsOptIn;
+        var t = DifficultyTuning(difficulty);
+        DiffStartMoneyMult = t.startMoney / START_MONEY;
+        DiffWinGoalMult = t.winGoal / WIN_CASH_GOAL;
+        DiffDemandGrowthDelta = t.growthDelta;
+        DiffNimbyMult = t.nimby;
+        DiffRevenueMult = t.revenue;
+        EventsEnabled = eventsOptIn;
+    }
 
     public MapGenerator Map { get; private set; }
     public StructureType[,] Grid { get; private set; }
@@ -98,7 +131,7 @@ public class Sim
         Grid = new StructureType[MapGenerator.GridWidth, MapGenerator.GridHeight];
         Paid = new float[MapGenerator.GridWidth, MapGenerator.GridHeight];
         LocalCooled = new bool[MapGenerator.GridWidth, MapGenerator.GridHeight];
-        Money = START_MONEY;
+        Money = START_MONEY * DiffStartMoneyMult;
         TotalDemand = BASE_DEMAND;
         Happiness = 100f;
         Day = 1;
@@ -279,7 +312,7 @@ public class Sim
     {
         float comfort = TownComfort(id);
         if (comfort <= 0f) return 0f;
-        float crowding = NIMBY_WEIGHT * (float)Math.Pow(_townLoad[id] / comfort, NIMBY_EXP);
+        float crowding = NIMBY_WEIGHT * DiffNimbyMult * (float)Math.Pow(_townLoad[id] / comfort, NIMBY_EXP);
         return crowding * (1f - TownRelief(id)) * EvNimbyMult;
     }
 
@@ -401,10 +434,10 @@ public class Sim
     private void CheckWin()
     {
         if (State != RunState.Playing) return;
-        if (NetWorth >= WIN_CASH_GOAL)
+        if (NetWorth >= EffectiveWinGoal)
         {
             State = RunState.Won;
-            EndReason = $"YOU BUILT A ${WIN_CASH_GOAL:N0} COMPUTE EMPIRE";
+            EndReason = $"YOU BUILT A ${EffectiveWinGoal:N0} COMPUTE EMPIRE";
         }
     }
 
@@ -412,7 +445,7 @@ public class Sim
     {
         if (State != RunState.Playing) return;
         var (_, served) = DemandServed();
-        LastRevenue = REVENUE_PER_SERVED * served * EvRevenueMult;
+        LastRevenue = REVENUE_PER_SERVED * served * EvRevenueMult * DiffRevenueMult;
         LastOpCost = _upkeepTotal;
         LastPassive = _passiveIncome;
         LastCoolingSaving = CoolingSaving;
@@ -421,7 +454,7 @@ public class Sim
 
         Happiness = ProjectedHappiness();
 
-        TotalDemand *= (1f + DAILY_DEMAND_GROWTH) * EvDemandMult;
+        TotalDemand *= (1f + DAILY_DEMAND_GROWTH + DiffDemandGrowthDelta) * EvDemandMult;
         Day++;
         TickEvents();
         RollEvent();
@@ -527,6 +560,8 @@ public class Sim
         sb.AppendLine(FormattableString.Invariant($"happiness={Happiness}"));
         sb.AppendLine($"state={State}");
         sb.AppendLine($"reason={Escape(EndReason)}");
+        sb.AppendLine($"difficulty={Difficulty}");
+        sb.AppendLine($"events={EventsOptIn}");
         sb.AppendLine(FormattableString.Invariant($"peak={PeakValue}"));
         sb.AppendLine($"peakday={PeakDay}");
         sb.AppendLine(FormattableString.Invariant($"served={PeakDemandServed}"));
@@ -562,6 +597,8 @@ public class Sim
         int day = 1;
         float money = START_MONEY, demand = BASE_DEMAND, happiness = 100f;
         var state = RunState.Playing;
+        var difficulty = Difficulty.Standard;
+        bool eventsOptIn = false;
         string reason = "";
         float peak = -1f;
         int peakDay = 1, servedPeak = 0, structsPeak = 0;
@@ -583,6 +620,8 @@ public class Sim
                 case "happiness": happiness = ParseFloat(val, 100f); break;
                 case "state": Enum.TryParse(val, out state); break;
                 case "reason": reason = val; break;
+                case "difficulty": Enum.TryParse(val, out difficulty); break;
+                case "events": bool.TryParse(val, out eventsOptIn); break;
                 case "peak": peak = ParseFloat(val, -1f); break;
                 case "peakday": int.TryParse(val, out peakDay); break;
                 case "served": int.TryParse(val, out servedPeak); break;
@@ -604,6 +643,7 @@ public class Sim
         }
 
         var sim = new Sim(new MapGenerator(seed));
+        sim.Configure(difficulty, eventsOptIn);
         foreach (var (x, y, s, paid) in tiles)
         {
             if (x < 0 || x >= MapGenerator.GridWidth || y < 0 || y >= MapGenerator.GridHeight) continue;
