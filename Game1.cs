@@ -130,9 +130,14 @@ public class Game1 : Game
         if (_shotPath != null)
         {
             _sim = new Sim(new MapGenerator(_shotSeed ?? 1000L));
-            _screen = Screen.Playing;
-            if (_shotDays < 0) _showHelp = true;
-            else BalanceHarness.PlayDays(_sim, _shotDays);
+            if (_shotDays <= -100) { _screen = Screen.Menu; _setupOpen = false; }
+            else if (_shotDays <= -200) { _screen = Screen.Menu; _setupOpen = true; }
+            else
+            {
+                _screen = Screen.Playing;
+                if (_shotDays < 0) _showHelp = true;
+                else BalanceHarness.PlayDays(_sim, _shotDays);
+            }
         }
         else
         {
@@ -147,8 +152,10 @@ public class Game1 : Game
     {
         _spriteBatch = new SpriteBatch(GraphicsDevice);
         _scene = new RenderTarget2D(GraphicsDevice, TargetWidth, TargetHeight);
-        _pixel = new Texture2D(GraphicsDevice, 1, 1);
-        _pixel.SetData(new[] { Color.White });
+        _pixel = new Texture2D(GraphicsDevice, 8, 8);
+        var px = new Color[64];
+        for (int i = 0; i < px.Length; i++) px[i] = Color.White;
+        _pixel.SetData(px);
         _font = new PixelFont(GraphicsDevice);
         _art = new PixelArt(GraphicsDevice);
         _sfx = new Sfx();
@@ -581,7 +588,166 @@ public class Game1 : Game
         base.Draw(gameTime);
 
         _frameCount++;
-        if (_shotPath != null && _frameCount >= 3) { SaveScreenshot(); Exit(); }
+        if (_shotPath != null && _frameCount >= 2)
+        {
+            SaveScreenshot();
+            Exit();
+        }
+    }
+
+    private void SaveScreenshot()
+    {
+        var canvas = new SoftCanvas(TargetWidth, TargetHeight);
+        canvas.Clear(BgColor);
+        ComposeSoft(canvas);
+        PngWriter.Write(_shotPath, canvas.Pixels, canvas.Width, canvas.Height);
+    }
+
+    private void ComposeSoft(SoftCanvas c)
+    {
+        var pal = PixelArt.PaletteDict;
+        var map = _sim.Map;
+        int frame = AnimFrame;
+        for (int x = 0; x < MapGenerator.GridWidth; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+            {
+                var dest = new Rectangle(x * Ts, y * Ts, Ts, Ts);
+                var tile = map.Tiles[x, y];
+                var structure = _sim.Grid[x, y];
+                Sprite baseSprite;
+                if (tile == TileType.River) baseSprite = frame == 0 ? Sprite.WaterA : Sprite.WaterB;
+                else if (structure != StructureType.None) baseSprite = StructureSprite(structure, frame, x, y);
+                else if (tile == TileType.Forest) baseSprite = Sprite.Tree;
+                else if (tile == TileType.Town) baseSprite = (x + y) % 2 == 0 ? Sprite.HouseA : Sprite.HouseB;
+                else baseSprite = (x * 7 + y * 13) % 3 == 0 ? Sprite.GrassB : Sprite.GrassA;
+                c.BlitPattern(PixelArt.PatternFor(baseSprite), pal, dest, Color.White);
+            }
+
+        c.Fill(new Rectangle(SideX, 0, SideW, TargetHeight), PanelColor);
+        c.Fill(new Rectangle(SideX, 0, 3, TargetHeight), PanelLine);
+        ComposeSoftSidebar(c, pal);
+        c.Fill(new Rectangle(0, MapH, MapW, TargetHeight - MapH), BgColor);
+        c.Fill(new Rectangle(0, MapH, MapW, 3), PanelLine);
+        ComposeSoftBottom(c);
+    }
+
+    private void ComposeSoftSidebar(SoftCanvas c, Dictionary<char, Color> pal)
+    {
+        int x = SideX + 12, y = 12;
+        var logo = new Rectangle(x, y, SideW - 24, 48);
+        SoftBevel(c, logo, new Color(22, 24, 32));
+        SoftText(c, "DATA", logo.X + 14, logo.Y + 8, TextGold, 3);
+        SoftText(c, "TYCOON", logo.X + 14, logo.Y + 26, TextCyan, 3);
+        y += 58;
+
+        y = SoftChunk(c, x, y, "FINANCE", new (string, Color)[]
+        {
+            ($"DAY {_sim.Day}", Color.White),
+            ($"CASH {ShortMoney(_sim.Money)}", Color.White),
+            ($"VALUE {ShortMoney(_sim.NetWorth)} / {ShortMoney(_sim.EffectiveWinGoal)}", TextGold),
+        }, bar: _sim.NetWorth / _sim.EffectiveWinGoal, barColor: TextGold);
+
+        Color hColor = HappinessColor(_sim.Happiness);
+        y = SoftChunk(c, x, y, "MORALE", new (string, Color)[]
+        {
+            ($"HAPPY {_sim.Happiness:F0}", hColor),
+            ($"REVOLT BELOW {Sim.HAPPINESS_LOSE:F0}", TextDim),
+        }, bar: _sim.Happiness / 100f, barColor: hColor, markFrac: Sim.HAPPINESS_LOSE / 100f);
+
+        var (demand, served) = _sim.DemandServed();
+        float pct = demand > 0f ? served / demand * 100f : 100f;
+        Color sColor = pct >= 99.5f ? TextGreen : (pct >= 70f ? Color.White : TextOrange);
+        y = SoftChunk(c, x, y, "GRID", new (string, Color)[]
+        {
+            ($"SERVED {served:F0}/{demand:F0}", sColor),
+            ($"BROWNOUT {100f - pct:F0}%", pct >= 99.5f ? TextDim : TextOrange),
+            ($"POWER {_sim.PowerProduced:F0}/{_sim.PowerDemanded:F0}", _sim.PowerShortfallActive ? TextRed : TextCyan),
+            ($"COOLED {_sim.CooledStructureTiles}/{_sim.StructureTiles}", TextCyan),
+        });
+
+        SoftText(c, "BUILD", x + 6, y + 4, TextDim, 2);
+        y += 24;
+        for (int i = 0; i < ToolDefs.Length; i++)
+        {
+            var (tool, type, icon, key) = ToolDefs[i];
+            var r = ToolButtonRect(tool);
+            bool selected = _tool == tool;
+            SoftBevel(c, r, selected ? new Color(46, 50, 68) : ChunkFill);
+            c.BlitPattern(PixelArt.PatternFor(icon), pal, new Rectangle(r.X + 3, r.Y + 3, 32, 32), Color.White);
+            string nm = Structures.Display(type);
+            SoftText(c, $"{key} {nm}", r.X + 42, r.Y + 5, selected ? Color.White : TextDim, 2);
+            SoftText(c, type != StructureType.None ? ShortMoney(Structures.Get(type).Cost) : "50% BACK", r.X + 42, r.Y + 21, selected ? TextGold : TextDim, 2);
+        }
+    }
+
+    private void ComposeSoftBottom(SoftCanvas c)
+    {
+        var map = _sim.Map;
+        int towns = map.Towns.Count;
+        int chipGap = 12;
+        int chipW = Math.Max(360, (MapW - chipGap * (towns + 1)) / Math.Max(1, towns));
+        int chipH = TargetHeight - MapH - (chipGap + 10);
+        for (int i = 0; i < towns; i++)
+        {
+            var t = map.Towns[i];
+            int cx = chipGap + i * (chipW + chipGap), cy = MapH + 10;
+            var chip = new Rectangle(cx, cy, chipW, chipH);
+            SoftBevel(c, chip, new Color(22, 24, 32));
+            c.Fill(new Rectangle(chip.X + 4, chip.Y + 4, chip.Width - 8, chip.Height - 8), ChunkFill);
+            c.Fill(new Rectangle(chip.X + 4, chip.Y + 4, 4, chip.Height - 8), TownTints[i % TownTints.Length]);
+            float dem = _sim.DemandForTown(t.Id);
+            float served = Math.Min(dem, _sim.TownCompute(t.Id));
+            float ratio = _sim.TownLoadRatio(t.Id);
+            SoftText(c, TownName(t.Id), cx + 16, cy + 8, Color.White, 2);
+            SoftText(c, $"SRV {served:F0}/{dem:F0}", cx + chipW - 260, cy + 8, served >= dem - 0.5f ? TextGreen : TextOrange, 2);
+            SoftText(c, MoodWord(ratio), cx + chipW - 120, cy + 8, MoodColor(ratio), 2);
+            SoftText(c, $"CROWDING {ratio * 100f:F0}%", cx + 16, cy + 34, TextDim, 2);
+        }
+    }
+
+    private void SoftBevel(SoftCanvas c, Rectangle r, Color fill)
+    {
+        c.Fill(r, fill);
+        c.Fill(new Rectangle(r.X, r.Y, r.Width, 2), PanelLine);
+        c.Fill(new Rectangle(r.X, r.Y, 2, r.Height), PanelLine);
+        c.Fill(new Rectangle(r.X, r.Y + r.Height - 2, r.Width, 2), new Color(8, 8, 12));
+        c.Fill(new Rectangle(r.X + r.Width - 2, r.Y, 2, r.Height), new Color(8, 8, 12));
+    }
+
+    private int SoftChunk(SoftCanvas c, int x, int y, string title, (string text, Color color)[] lines, float bar = -1f, Color? barColor = null, float markFrac = -1f)
+    {
+        int h = 26 + lines.Length * 17 + (bar >= 0f ? 14 : 4);
+        var panel = new Rectangle(x, y, SideW - 24, h);
+        SoftBevel(c, panel, new Color(22, 24, 32));
+        c.Fill(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, panel.Height - 8), ChunkFill);
+        c.Fill(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, 16), new Color(38, 42, 56));
+        SoftText(c, title, panel.X + 10, panel.Y + 7, TextCyan, 2);
+        int ly = panel.Y + 26;
+        foreach (var (text, color) in lines) { SoftText(c, text, panel.X + 10, ly, color, 2); ly += 17; }
+        if (bar >= 0f)
+        {
+            var br = new Rectangle(panel.X + 10, ly + 2, panel.Width - 20, 8);
+            c.Fill(br, new Color(50, 52, 62));
+            c.Fill(new Rectangle(br.X, br.Y, (int)(br.Width * Math.Clamp(bar, 0f, 1f)), br.Height), barColor ?? TextGold);
+            c.Outline(br, new Color(12, 12, 16));
+            if (markFrac >= 0f) c.Fill(new Rectangle(br.X + (int)(br.Width * markFrac), br.Y - 2, 2, br.Height + 4), TextRed);
+        }
+        return y + h + 8;
+    }
+
+    private void SoftText(SoftCanvas c, string text, int x, int y, Color color, int scale = 2)
+    {
+        int cx = x;
+        foreach (var raw in text)
+        {
+            char ch = char.ToUpperInvariant(raw);
+            if (ch == '\n') continue;
+            if (PixelFont.GlyphRows(ch) is string[] rows)
+                c.BlitPattern(rows, PixelFont.GlyphPalette(color), new Rectangle(cx, y, PixelFont.GlyphW * scale, PixelFont.GlyphH * scale), Color.White);
+            else if (ch != ' ')
+                c.BlitPattern(PixelFont.GlyphRows('?')!, PixelFont.GlyphPalette(color), new Rectangle(cx, y, PixelFont.GlyphW * scale, PixelFont.GlyphH * scale), Color.White);
+            cx += PixelFont.Advance * scale;
+        }
     }
 
     private void DrawSceneScaled()
@@ -1362,17 +1528,5 @@ public class Game1 : Game
             _soundOn = File.ReadAllText(SettingsFileName).Contains("sound=1");
         }
         catch { }
-    }
-
-    private void SaveScreenshot()
-    {
-        int w = _scene.Width;
-        int h = _scene.Height;
-        var data = new Color[w * h];
-        _scene.GetData(data);
-        using var tex = new Texture2D(GraphicsDevice, w, h);
-        tex.SetData(data);
-        using var stream = File.Create(_shotPath);
-        tex.SaveAsPng(stream, w, h);
     }
 }

@@ -327,5 +327,9 @@ public class PixelArt
         Atlas.SetData(data);
     }
 
+    public static Dictionary<char, Color> PaletteDict => Palette;
+
+    public static string[] PatternFor(Sprite s) => Patterns[s];
+
     public Rectangle Src(Sprite sprite) => _rects[sprite];
 }

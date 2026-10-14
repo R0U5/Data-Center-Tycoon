@@ -91,7 +91,17 @@ are good news. Leave them off for a clean, calibrated economy.
 - `dotnet run -- --sim --selftest` — economy, save/load round-trip, and `v3`→`v4` upgrade tests.
 - `dotnet run -- --sim --trace` — day-by-day trace of the skilled policy.
 - `dotnet run -- --shot out.png --seed 1000 --days 40` — boots the game, lets a skilled AI
-  play N days, saves a screenshot, exits (works headless under xvfb).
+  play N days, saves a screenshot, exits.
+- `dotnet run -- --shot out.png --view menu` (or `--view setup`, `--view help`) — captures the
+  title, setup, or help screen.
+
+### Screenshots
+
+`--shot` writes a PNG from a **CPU rasterizer** (`SoftCanvas` + `PngWriter`), not a GPU
+read-back. MonoGame's DesktopGL back-buffer read returns mostly-black in headless/no-GPU
+environments, so the shot path composites the same scene directly into a pixel buffer and
+encodes the PNG by hand. This works with no display, no GPU, and no GL driver — just
+`xvfb-run -a dotnet run -- --shot ...`.
 
 CI (`.github/workflows/build.yml`) builds with warnings-as-errors and runs the self-test, the
 balance ladder, and a headless render smoke test on every push.

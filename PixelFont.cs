@@ -94,6 +94,15 @@ public class PixelFont
         _atlas.SetData(data);
     }
 
+    public static string[] GlyphRows(char ch)
+        => Glyphs.TryGetValue(char.ToUpperInvariant(ch), out var rows) ? rows : null;
+
+    public static Dictionary<char, Color> GlyphPalette(Color color)
+    {
+        var d = new Dictionary<char, Color> { ['#'] = color, ['.'] = new Color(0, 0, 0, 0) };
+        return d;
+    }
+
     public void Draw(SpriteBatch batch, string text, int x, int y, Color color, int scale = 2)
     {
         int cx = x;
