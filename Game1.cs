@@ -606,6 +606,14 @@ public class Game1 : Game
     private void ComposeSoft(SoftCanvas c)
     {
         var pal = PixelArt.PaletteDict;
+
+        if (_screen == Screen.Menu)
+        {
+            if (_setupOpen) ComposeSoftSetup(c);
+            else ComposeSoftTitle(c);
+            return;
+        }
+
         var map = _sim.Map;
         int frame = AnimFrame;
         for (int x = 0; x < MapGenerator.GridWidth; x++)
@@ -629,7 +637,103 @@ public class Game1 : Game
         c.Fill(new Rectangle(0, MapH, MapW, TargetHeight - MapH), BgColor);
         c.Fill(new Rectangle(0, MapH, MapW, 3), PanelLine);
         ComposeSoftBottom(c);
+        if (_showHelp) ComposeSoftHelp(c);
     }
+
+    private void ComposeSoftTitle(SoftCanvas c)
+    {
+        SoftText(c, "DATA", TargetWidth / 2 - 190, 150, TextGold, 10);
+        SoftText(c, "TYCOON", TargetWidth / 2 - 130, 260, TextCyan, 10);
+        SoftTextCentered(c, "AN 8-BIT COMPUTE EMPIRE", 390, TextDim, 2);
+
+        var panel = new Rectangle(TargetWidth / 2 - 260, TargetHeight / 2 - 130, 520, _menuButtons.Length * 50 + 40);
+        SoftBevel(c, panel, new Color(22, 24, 32));
+        c.Fill(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, panel.Height - 8), ChunkFill);
+        for (int i = 0; i < _menuButtons.Length; i++)
+        {
+            var b = _menuButtons[i];
+            bool sel = _hover == i;
+            if (sel) SoftText(c, ">", b.rect.X - 34, b.rect.Y + 14, TextGold, 3);
+            SoftText(c, b.label, b.rect.X, b.rect.Y + 14, sel ? TextGold : TextDim, 3);
+        }
+        SoftTextCentered(c, "PRESS START", TargetHeight - 200, TextGreen, 2);
+        SoftTextCentered(c, "ARROWS OR MOUSE  +  ENTER TO SELECT", TargetHeight - 130, new Color(90, 96, 112), 2);
+        SoftTextCentered(c, "(C) 2026 GOBLIN SOFTWORKS      ALL RIGHTS RESERVED", TargetHeight - 60, new Color(70, 74, 90), 2);
+        var hs = HighScores.Load();
+        if (hs.Count > 0) SoftText(c, $"HI {ShortMoney(hs[0].Value)}", 24, 24, TextGold, 2);
+    }
+
+    private void ComposeSoftSetup(SoftCanvas c)
+    {
+        var frame = new Rectangle(TargetWidth / 2 - 520, 90, 1040, TargetHeight - 210);
+        SoftBevel(c, frame, new Color(22, 24, 32));
+        c.Fill(new Rectangle(frame.X + 4, frame.Y + 4, frame.Width - 8, frame.Height - 8), ChunkFill);
+        SoftText(c, "NEW GAME", TargetWidth / 2 - 130, 130, TextGold, 6);
+        SoftTextCentered(c, "CONFIGURE YOUR OPERATION", 220, TextDim, 2);
+
+        var t = Sim.DifficultyTuning(_selDifficulty);
+        int cx = TargetWidth / 2;
+        SoftText(c, "DIFFICULTY", cx - 420, 300, TextCyan, 2);
+        SoftText(c, "<", cx - 250, 296, TextGold, 2);
+        SoftText(c, DifficultyName(_selDifficulty), cx - 226, 296, Color.White, 2);
+        SoftText(c, ">", cx - 226 + _font.Width(DifficultyName(_selDifficulty)) + 12, 296, TextGold, 2);
+        SoftText(c, DifficultyBlurb(_selDifficulty), cx - 226, 332, TextDim, 2);
+        SoftText(c, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", cx - 420, 360, TextDim, 2);
+
+        SoftText(c, "EVENTS", cx - 420, 440, TextCyan, 2);
+        SoftText(c, _selEvents ? "[ ON ]" : "[ OFF ]", cx - 226, 440, _selEvents ? TextGreen : TextDim, 2);
+        SoftText(c, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", cx - 226, 472, TextDim, 2);
+
+        foreach (var s in _setupRects)
+        {
+            bool sel = _setupSel >= 0 && _setupRects[_setupSel].action == s.action;
+            int tw = _font.Width(s.label, s.action >= 13 ? 3 : 2);
+            int tx = s.rect.X + (s.rect.Width - tw) / 2;
+            int scale = s.action >= 13 ? 3 : 2;
+            int ty = s.rect.Y + (s.rect.Height - _font.Height(scale)) / 2;
+            if (s.action >= 13)
+            {
+                SoftBevel(c, s.rect, sel ? new Color(46, 50, 68) : ChunkFill);
+                SoftText(c, s.label, tx, ty, sel ? Color.White : TextDim, 3);
+            }
+            else
+            {
+                SoftText(c, s.label, tx, s.rect.Y + 14, sel ? Color.White : TextDim, 2);
+            }
+        }
+        SoftTextCentered(c, "ARROWS MOVE / SELECT   ESC BACK", frame.Bottom - 44, new Color(90, 96, 112), 2);
+    }
+
+    private void ComposeSoftHelp(SoftCanvas c)
+    {
+        c.Fill(new Rectangle(0, 0, TargetWidth, TargetHeight), new Color(0, 0, 0, 200));
+        int w = 1000, h = 700;
+        var panel = new Rectangle((TargetWidth - w) / 2, (TargetHeight - h) / 2, w, h);
+        SoftBevel(c, panel, new Color(22, 24, 32));
+        c.Fill(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, panel.Height - 8), PanelColor);
+        int x = panel.X + 28, y = panel.Y + 22;
+        SoftText(c, "HOW TO PLAY", x, y, TextGold, 3); y += 44;
+        string[] lines =
+        {
+            "TOWNS EMIT COMPUTE DEMAND THAT GROWS EVERY DAY.",
+            "ONLY BUILDINGS INSIDE A TOWN'S TINTED CATCHMENT SERVE IT.",
+            "SHEDS ARE CHEAP CASH FLOW. HALLS AND HYPERSCALE SERVE MORE",
+            "DEMAND PER TILE AND PER POINT OF ANGER - BUT RUN HOT.",
+            "BLUE RIVERFRONT TILES COOL UPKEEP TO 55%. COOLING TOWERS",
+            "EXTEND THAT COOLING INLAND.",
+            "PARKS RAISE A TOWN'S COMFORT. FORESTS LEFT STANDING CALM TOWNS.",
+            "POWER PLANTS SUPPLY POWER; HYPERSCALE AND EQUIPMENT DRAW IT.",
+            "E-WASTE RECYCLERS EARN PASSIVE CASH. BROWNOUTS ANGER EVERYONE.",
+            "BUILD OVER A CHEAPER BUILDING TO UPGRADE. PRESS Z TO UNDO.",
+            "REACH THE COMPANY VALUE GOAL BEFORE THE TOWNS REVOLT.",
+        };
+        foreach (var line in lines) { SoftText(c, line, x, y, Color.White, 2); y += 26; }
+        y += 10;
+        SoftText(c, "PRESS H TO CLOSE", x, y, TextGold, 2);
+    }
+
+    private void SoftTextCentered(SoftCanvas c, string text, int y, Color color, int scale = 2)
+        => SoftText(c, text, (TargetWidth - _font.Width(text, scale)) / 2, y, color, scale);
 
     private void ComposeSoftSidebar(SoftCanvas c, Dictionary<char, Color> pal)
     {

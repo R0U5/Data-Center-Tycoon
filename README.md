@@ -10,6 +10,27 @@ calm. Reach the company value goal before the towns revolt or the money runs out
 
 ![Data Tycoon](docs/screenshot.png)
 
+| Title screen | New game setup | How to play |
+|---|---|---|
+| ![Menu](docs/menu.png) | ![Setup](docs/setup.png) | ![Help](docs/help.png) |
+
+## Features
+
+- **Procedural maps** — a river, forests, and three towns with service catchments, generated
+  fresh each run (share a seed to replay an exact map).
+- **A tech-and-tolerance race** — serve demand for cash, but crowding a town past its comfort
+  makes it furious, and the penalty grows faster the harder you pack.
+- **Seven structures across three tiers** — sheds → halls → hyperscale, plus parks, cooling
+  towers, power plants, and e-waste recyclers.
+- **Cooling, power, and passive income** — claim the riverfront (or build cooling towers) to cut
+  upkeep; run a power grid for the big tiers; bank passive cash from recyclers.
+- **Four difficulty presets** — Relaxed / Standard / Hard / Brutal.
+- **Satirical random events** — an opt-in "news cycle" of thinly-disguised AI-industry news.
+- **High-score table**, undo, hover tooltips, colourblind-safe indicators, and full keyboard +
+  mouse control.
+- **No content pipeline** — the font, sprites, sounds, and music are all generated in code.
+- **A built-in screenshot tool** that works headless, with no GPU (`--shot`).
+
 ## Run it (Windows)
 
 **Just double-click `Play.bat`.** It builds and launches the game.
@@ -31,7 +52,7 @@ Both produce a self-contained executable that runs with nothing else installed.
 | Input | Action |
 |---|---|
 | 1–7 | Select Server Shed / Data Hall / Hyperscale / Park / Cooling Tower / Power Plant / Recycler |
-| X or 8 | Select bulldozer (50% refund) |
+| 8 | Select bulldozer (50% refund) |
 | Left-drag | Build the selected structure (or bulldoze an area) |
 | Right-click | Bulldoze a single tile |
 | Space | End the day |
@@ -41,7 +62,9 @@ Both produce a self-contained executable that runs with nothing else installed.
 | R / N | Retry this region / new region |
 | Esc | Back to menu (or close the help overlay) |
 
-The window is resizable — the game renders at a fixed 1920×1080 and letterboxes to fit.
+Menus use a blinking cursor: ↑/↓ (or W/S) move, ←/→ cycles difficulty, Enter selects, Esc backs
+out. Mouse works everywhere too. The window is resizable — the game renders at a fixed 1920×1080
+and letterboxes to fit.
 
 Build over a cheaper structure to upgrade it in place (you're credited half of what the old
 one cost). Blue-tinged riverfront tiles cool upkeep to 55%. Forest tiles cost 2.5x to build
