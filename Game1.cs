@@ -12,7 +12,7 @@ public class Game1 : Game
 {
     private const int TargetWidth = 1920;
     private const int TargetHeight = 1080;
-    private const int Ts = MapGenerator.TileSize;
+    private const int Ts = 33;
     private const int MapW = MapGenerator.GridWidth * Ts;
     private const int MapH = MapGenerator.GridHeight * Ts;
     private const int SideX = MapW;
@@ -55,7 +55,7 @@ public class Game1 : Game
         (Tool.Cooling, StructureType.CoolingTower, Sprite.Cooling, "5"),
         (Tool.Power, StructureType.PowerPlant, Sprite.Power, "6"),
         (Tool.Recycler, StructureType.Recycler, Sprite.Recycler, "7"),
-        (Tool.Raze, StructureType.None, Sprite.Raze, "X"),
+        (Tool.Raze, StructureType.None, Sprite.Raze, "8"),
     };
 
     private readonly record struct UndoStep(int x0, int y0, int x1, int y1, StructureType type, bool wasBuild);
@@ -676,8 +676,8 @@ public class Game1 : Game
             SoftBevel(c, r, selected ? new Color(46, 50, 68) : ChunkFill);
             c.BlitPattern(PixelArt.PatternFor(icon), pal, new Rectangle(r.X + 3, r.Y + 3, 32, 32), Color.White);
             string nm = Structures.Display(type);
-            SoftText(c, $"{key} {nm}", r.X + 42, r.Y + 5, selected ? Color.White : TextDim, 2);
-            SoftText(c, type != StructureType.None ? ShortMoney(Structures.Get(type).Cost) : "50% BACK", r.X + 42, r.Y + 21, selected ? TextGold : TextDim, 2);
+            SoftText(c, $"{key} {nm}", r.X + 44, r.Y + 5, selected ? Color.White : TextDim, 2);
+            SoftText(c, type != StructureType.None ? ShortMoney(Structures.Get(type).Cost) : "50% REFUND", r.X + 44, r.Y + 21, selected ? TextGold : TextDim, 2);
         }
     }
 
@@ -717,14 +717,14 @@ public class Game1 : Game
 
     private int SoftChunk(SoftCanvas c, int x, int y, string title, (string text, Color color)[] lines, float bar = -1f, Color? barColor = null, float markFrac = -1f)
     {
-        int h = 26 + lines.Length * 17 + (bar >= 0f ? 14 : 4);
+        int h = 30 + lines.Length * 21 + (bar >= 0f ? 16 : 4);
         var panel = new Rectangle(x, y, SideW - 24, h);
         SoftBevel(c, panel, new Color(22, 24, 32));
         c.Fill(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, panel.Height - 8), ChunkFill);
-        c.Fill(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, 16), new Color(38, 42, 56));
+        c.Fill(new Rectangle(panel.X + 4, panel.Y + 4, panel.Width - 8, 18), new Color(38, 42, 56));
         SoftText(c, title, panel.X + 10, panel.Y + 7, TextCyan, 2);
-        int ly = panel.Y + 26;
-        foreach (var (text, color) in lines) { SoftText(c, text, panel.X + 10, ly, color, 2); ly += 17; }
+        int ly = panel.Y + 28;
+        foreach (var (text, color) in lines) { SoftText(c, text, panel.X + 10, ly, color, 2); ly += 21; }
         if (bar >= 0f)
         {
             var br = new Rectangle(panel.X + 10, ly + 2, panel.Width - 20, 8);
