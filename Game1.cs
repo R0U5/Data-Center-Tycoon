@@ -19,9 +19,9 @@ public class Game1 : Game
     private const int SideW = TargetWidth - MapW;
 
     private static readonly Rectangle SetupFrame = new(440, 90, 1040, 870);
-    private static readonly Rectangle BtnDiffMinus = new(750, 280, 44, 44);
-    private static readonly Rectangle BtnDiffPlus = new(926, 280, 44, 44);
-    private static readonly Rectangle BtnEvents = new(750, 430, 140, 40);
+    private static readonly Rectangle BtnDiffMinus = new(700, 280, 40, 40);
+    private static readonly Rectangle BtnDiffPlus = new(876, 280, 40, 40);
+    private static readonly Rectangle BtnEvents = new(700, 430, 140, 40);
     private static readonly Rectangle BtnStart = new(680, 580, 260, 70);
     private static readonly Rectangle BtnBack = new(980, 580, 260, 70);
 
@@ -675,34 +675,34 @@ public class Game1 : Game
         SoftTextCentered(c, "CONFIGURE YOUR OPERATION", 220, TextDim, 2);
 
         var t = Sim.DifficultyTuning(_selDifficulty);
-        int cx = TargetWidth / 2;
 
         // Difficulty row
-        SoftText(c, "DIFFICULTY", cx - 310, 286, TextCyan, 2);
-        SoftText(c, "<", BtnDiffMinus.X + 12, BtnDiffMinus.Y + 8, TextGold, 3);
+        SoftText(c, "DIFFICULTY", 560, 286, TextCyan, 2);
+        SoftText(c, "<", BtnDiffMinus.X + 10, BtnDiffMinus.Y + 8, TextGold, 3);
         SoftText(c, DifficultyName(_selDifficulty), BtnDiffMinus.X + BtnDiffMinus.Width + 16, 292, Color.White, 2);
-        SoftText(c, ">", BtnDiffPlus.X + 12, BtnDiffPlus.Y + 8, TextGold, 3);
-        SoftText(c, DifficultyBlurb(_selDifficulty), cx - 310, 332, TextDim, 2);
-        SoftText(c, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", cx - 310, 360, TextDim, 2);
+        SoftText(c, ">", BtnDiffPlus.X + 10, BtnDiffPlus.Y + 8, TextGold, 3);
+        SoftText(c, DifficultyBlurb(_selDifficulty), 560, 332, TextDim, 2);
+        SoftText(c, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", 560, 360, TextDim, 2);
 
         // Events row
-        SoftText(c, "EVENTS", cx - 310, 426, TextCyan, 2);
+        SoftText(c, "EVENTS", 560, 426, TextCyan, 2);
         var toggleText = _selEvents ? "ON" : "OFF";
         var toggleX = BtnEvents.X + (BtnEvents.Width - _font.Width(toggleText, 2)) / 2;
         var toggleY = BtnEvents.Y + (BtnEvents.Height - _font.Height(2)) / 2;
         SoftBevel(c, BtnEvents, _selEvents ? new Color(40, 60, 44) : ChunkFill);
         SoftText(c, toggleText, toggleX, toggleY, _selEvents ? TextGreen : TextDim, 2);
-        SoftText(c, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", cx - 310, 472, TextDim, 2);
+        SoftText(c, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", 560, 472, TextDim, 2);
 
-        // Rows
+        // Action buttons (only START/BACK get labels; <, >, ON/OFF are drawn above)
         foreach (var s in _setupRows)
         {
+            if (s.action < 13) continue;
             bool sel = _setupSel >= 0 && _setupRows[_setupSel].action == s.action;
             int tw = _font.Width(s.label, 3);
             int tx = s.rect.X + (s.rect.Width - tw) / 2;
             int ty = s.rect.Y + (s.rect.Height - _font.Height(3)) / 2;
             SoftBevel(c, s.rect, sel ? new Color(46, 50, 68) : ChunkFill);
-            SoftText(c, s.label, tx, s.rect.Y + (s.rect.Height - _font.Height(3)) / 2, sel ? Color.White : TextDim, 3);
+            SoftText(c, s.label, tx, ty, sel ? Color.White : TextDim, 3);
         }
 
         SoftTextCentered(c, "ARROWS SELECT   LEFT/RIGHT ADJUST   ENTER ACTIVATE   ESC BACK", frame.Bottom - 44, new Color(90, 96, 112), 2);
@@ -924,34 +924,34 @@ public class Game1 : Game
         DrawCentered("CONFIGURE YOUR OPERATION", 220, TextDim);
 
         var t = Sim.DifficultyTuning(_selDifficulty);
-        int cx = TargetWidth / 2;
 
         // Difficulty row
-        _font.Draw(_spriteBatch, "DIFFICULTY", cx - 310, 286, TextCyan, 2);
-        _font.Draw(_spriteBatch, "<", BtnDiffMinus.X + 12, BtnDiffMinus.Y + 8, TextGold, 3);
+        _font.Draw(_spriteBatch, "DIFFICULTY", 560, 286, TextCyan, 2);
+        _font.Draw(_spriteBatch, "<", BtnDiffMinus.X + 10, BtnDiffMinus.Y + 8, TextGold, 3);
         _font.Draw(_spriteBatch, DifficultyName(_selDifficulty), BtnDiffMinus.X + BtnDiffMinus.Width + 16, 292, Color.White, 2);
-        _font.Draw(_spriteBatch, ">", BtnDiffPlus.X + 12, BtnDiffPlus.Y + 8, TextGold, 3);
-        _font.Draw(_spriteBatch, DifficultyBlurb(_selDifficulty), cx - 310, 332, TextDim, 2);
-        _font.Draw(_spriteBatch, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", cx - 310, 360, TextDim, 2);
+        _font.Draw(_spriteBatch, ">", BtnDiffPlus.X + 10, BtnDiffPlus.Y + 8, TextGold, 3);
+        _font.Draw(_spriteBatch, DifficultyBlurb(_selDifficulty), 560, 332, TextDim, 2);
+        _font.Draw(_spriteBatch, $"START {t.startMoney:C0}   GOAL {t.winGoal:C0}   DEMAND +{(Sim.DAILY_DEMAND_GROWTH + t.growthDelta) * 100f:F1}%/DAY", 560, 360, TextDim, 2);
 
         // Events row
-        _font.Draw(_spriteBatch, "EVENTS", cx - 310, 426, TextCyan, 2);
+        _font.Draw(_spriteBatch, "EVENTS", 560, 426, TextCyan, 2);
         var toggleText = _selEvents ? "ON" : "OFF";
         var toggleX = BtnEvents.X + (BtnEvents.Width - _font.Width(toggleText, 2)) / 2;
         var toggleY = BtnEvents.Y + (BtnEvents.Height - _font.Height(2)) / 2;
         BevelPanel(BtnEvents, _selEvents ? new Color(40, 60, 44) : ChunkFill, PanelLine, new Color(8, 8, 12));
         _font.Draw(_spriteBatch, toggleText, toggleX, toggleY, _selEvents ? TextGreen : TextDim, 2);
-        _font.Draw(_spriteBatch, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", cx - 310, 472, TextDim, 2);
+        _font.Draw(_spriteBatch, _selEvents ? "THE NEWS CYCLE WILL SHAPE YOUR RUN." : "A CLEAN, CALIBRATED ECONOMY.", 560, 472, TextDim, 2);
 
-        // Rows
+        // Action buttons (only START/BACK get labels; <, >, ON/OFF are drawn above)
         foreach (var s in _setupRows)
         {
+            if (s.action < 13) continue;
             bool sel = _setupSel >= 0 && _setupRows[_setupSel].action == s.action;
             int tw = _font.Width(s.label, 3);
             int tx = s.rect.X + (s.rect.Width - tw) / 2;
             int ty = s.rect.Y + (s.rect.Height - _font.Height(3)) / 2;
             BevelPanel(s.rect, sel ? new Color(46, 50, 68) : ChunkFill, PanelLine, new Color(8, 8, 12));
-            _font.Draw(_spriteBatch, s.label, tx, s.rect.Y + (s.rect.Height - _font.Height(3)) / 2, sel ? Color.White : TextDim, 3);
+            _font.Draw(_spriteBatch, s.label, tx, ty, sel ? Color.White : TextDim, 3);
         }
 
         DrawCentered("ARROWS SELECT   LEFT/RIGHT ADJUST   ENTER ACTIVATE   ESC BACK", frame.Bottom - 44, new Color(90, 96, 112));
