@@ -32,8 +32,8 @@ public static class BalanceHarness
 
     private static readonly Policy[] ExtendedPolicies =
     {
-        new() { Name = "skilled + cooling + power", ComfortTarget = 0.9f, UseTiers = true, UseParks = true, UseCooling = true, UsePower = true },
-        new() { Name = "cooling+power, no parks", ComfortTarget = 0.9f, UseTiers = true, UseCooling = true, UsePower = true },
+        new() { Name = "skilled + cooling + power", ComfortTarget = 0.82f, UseTiers = true, UseParks = true, UseCooling = true, UsePower = true },
+        new() { Name = "cooling+power, no parks", ComfortTarget = 0.82f, UseTiers = true, UseCooling = true, UsePower = true },
         new() { Name = "recycler economy", ComfortTarget = 0.9f, UseTiers = true, UseParks = true, UseRecycler = true },
     };
 
@@ -254,8 +254,8 @@ public static class BalanceHarness
 
     private static void StepManager(Sim sim, List<TownPlan> towns, Policy policy)
     {
-        if (policy.UsePower) EnsurePower(sim, towns);
         if (policy.UseRecycler) EnsureRecycler(sim, towns);
+        if (policy.UsePower) ReservePowerTiles(sim, towns, policy);
 
         foreach (var plan in towns)
         {
@@ -284,7 +284,8 @@ public static class BalanceHarness
             if (policy.UseCooling && tier == Structures.Campus)
                 EnsureCooling(sim, plan, demand);
 
-            int grass = plan.DcOrder.Count;
+            int infra = CountInfrastructure(sim, plan);
+            int grass = plan.DcOrder.Count - infra;
             int parksWant = parksBuilt;
             if (policy.UseParks && tier == Structures.Campus)
             {
@@ -309,13 +310,39 @@ public static class BalanceHarness
 
             ApplyTown(sim, plan, tier, dcWant, parksNow, useForest: false);
         }
+
+        if (policy.UsePower) EnsurePower(sim, towns);
+    }
+
+    private static int CountInfrastructure(Sim sim, TownPlan plan)
+    {
+        int n = 0;
+        foreach (var c in plan.DcOrder)
+            if (IsInfrastructure(sim.Grid[c.x, c.y])) n++;
+        return n;
+    }
+
+    private static void ReservePowerTiles(Sim sim, List<TownPlan> towns, Policy policy)
+    {
+        int needed = (int)Math.Ceiling(Math.Max(1f, sim.PowerDemanded + 8f) / Structures.PowerPlant.PowerOutput);
+        int have = 0;
+        for (int x = 0; x < MapGenerator.GridWidth; x++)
+            for (int y = 0; y < MapGenerator.GridHeight; y++)
+                if (sim.Grid[x, y] == StructureType.PowerPlant) have++;
+        if (have >= needed) return;
+        foreach (var plan in towns)
+            foreach (var c in plan.ParkOrder)
+            {
+                if (sim.Grid[c.x, c.y] != StructureType.None) continue;
+                if (sim.TryPlace(c.x, c.y, StructureType.PowerPlant)) return;
+            }
     }
 
     private static void EnsurePower(Sim sim, List<TownPlan> towns)
     {
-        if (sim.PowerMargin > 4f) return;
+        if (sim.PowerMargin > 6f) return;
         foreach (var plan in towns)
-            foreach (var c in plan.CoolOrder)
+            foreach (var c in plan.ParkOrder)
             {
                 if (sim.Grid[c.x, c.y] != StructureType.None) continue;
                 if (sim.TryPlace(c.x, c.y, StructureType.PowerPlant)) return;
@@ -330,12 +357,13 @@ public static class BalanceHarness
                 if (sim.Grid[x, y] == StructureType.Recycler) recyclers++;
         if (recyclers >= 2) return;
         foreach (var plan in towns)
+        {
             foreach (var c in plan.ParkOrder)
             {
                 if (sim.Grid[c.x, c.y] != StructureType.None) continue;
                 if (sim.TryPlace(c.x, c.y, StructureType.Recycler)) return;
-                return;
             }
+        }
     }
 
     private static void EnsureCooling(Sim sim, TownPlan plan, float demand)
@@ -358,6 +386,7 @@ public static class BalanceHarness
         foreach (var c in plan.ParkOrder.Take(parksWant))
         {
             if (sim.Grid[c.x, c.y] == StructureType.Park) continue;
+            if (IsInfrastructure(sim.Grid[c.x, c.y])) continue;
             if (sim.Grid[c.x, c.y] != StructureType.None) sim.DemolishAt(c.x, c.y);
             if (!sim.TryPlace(c.x, c.y, StructureType.Park)) return;
         }

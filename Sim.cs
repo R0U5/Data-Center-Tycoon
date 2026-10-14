@@ -31,6 +31,7 @@ public class Sim
     public const int SAVE_VERSION = 4;
 
     public const float POWER_SHORTFALL_PENALTY = 40f;
+    public const float POWER_SHORTFALL_EXP = 0.6f;
 
     public MapGenerator Map { get; private set; }
     public StructureType[,] Grid { get; private set; }
@@ -114,6 +115,17 @@ public class Sim
     public bool HasPowerGrid => _powerProduced > 0f;
     public bool PowerShortfallActive => HasPowerGrid && PowerStarved;
 
+    public float PowerShortfallFraction
+    {
+        get
+        {
+            if (!HasPowerGrid || _powerDemanded <= 0f) return 0f;
+            float unmet = _powerDemanded - _powerProduced;
+            if (unmet <= 0f) return 0f;
+            return Math.Clamp(unmet / _powerDemanded, 0f, 1f);
+        }
+    }
+
     public float DemandForTown(int id) => Map.Towns[id].Size / (float)_townSizeDenom * TotalDemand;
     public float TownCompute(int id) => _townCompute[id];
     public float TownParkComfort(int id) => _townParkComfort[id];
@@ -173,7 +185,9 @@ public class Sim
     {
         var (d, s) = DemandServed();
         float brownout = d > 0f ? BROWNOUT_WEIGHT * (1f - s / d) : 0f;
-        float powerPenalty = PowerShortfallActive ? POWER_SHORTFALL_PENALTY : 0f;
+        float powerPenalty = PowerShortfallActive
+            ? POWER_SHORTFALL_PENALTY * (float)Math.Pow(PowerShortfallFraction, POWER_SHORTFALL_EXP)
+            : 0f;
         return 100f - NimbyTotal() - brownout - powerPenalty;
     }
 
