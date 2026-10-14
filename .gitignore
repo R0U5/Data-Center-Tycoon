@@ -4,6 +4,8 @@ obj/
 Content/bin/
 Content/obj/
 Standalone/
+Standalone-linux/
+Standalone-win/
 publish/
 
 # Runtime save file (created in the working directory at run time)

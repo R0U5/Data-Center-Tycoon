@@ -67,6 +67,22 @@ Every strategy tops out somewhere: sheds alone can't outgrow the anger they caus
 without parks run out of tolerant neighbors. Demand grows 5.5% a day forever — you can't serve
 it all. Serve what you can, keep the towns just short of furious, and bank the goal.
 
+### Difficulty
+
+**New Game** opens a setup screen with four presets — **Relaxed / Standard / Hard / Brutal** —
+each retuning start cash, the win goal, demand growth, NIMBY weight, and revenue. **Standard** is
+the calibrated game. Skilled play wins on Relaxed and Standard, grinds on Hard, and usually loses
+on Brutal.
+
+### Satirical events (off by default)
+
+Flip **EVENTS: ON** in the setup screen for the "news cycle": random, thinly-disguised riffs on
+real 2024-2026 AI-industry news — chip tariffs, rare-earth export bans, the "superintelligence"
+rebrand, data-centre water-use exposés, AI-bubble jitters, GPU shortages, talent wars, angry
+voters, drought, NIMBY councils, plus two decision events (a strings-attached state grant, and
+buying a failing rival). Events scale demand, revenue, upkeep, build costs, and anger — and some
+are good news. Leave them off for a clean, calibrated economy.
+
 ## For tinkerers
 
 - `dotnet run -- --sim [seeds]` — headless balance harness. Prints the **vanilla four-structure
