@@ -130,8 +130,8 @@ public class Game1 : Game
         if (_shotPath != null)
         {
             _sim = new Sim(new MapGenerator(_shotSeed ?? 1000L));
-            if (_shotDays <= -100) { _screen = Screen.Menu; _setupOpen = false; }
-            else if (_shotDays <= -200) { _screen = Screen.Menu; _setupOpen = true; }
+            if (_shotDays <= -200) { _screen = Screen.Menu; _setupOpen = true; }
+            else if (_shotDays <= -100) { _screen = Screen.Menu; _setupOpen = false; }
             else
             {
                 _screen = Screen.Playing;
@@ -644,14 +644,15 @@ public class Game1 : Game
         {
             ($"DAY {_sim.Day}", Color.White),
             ($"CASH {ShortMoney(_sim.Money)}", Color.White),
-            ($"VALUE {ShortMoney(_sim.NetWorth)} / {ShortMoney(_sim.EffectiveWinGoal)}", TextGold),
+            ($"VALUE {ShortMoney(_sim.NetWorth)}", TextGold),
+            ($"GOAL {ShortMoney(_sim.EffectiveWinGoal)}", TextDim),
         }, bar: _sim.NetWorth / _sim.EffectiveWinGoal, barColor: TextGold);
 
         Color hColor = HappinessColor(_sim.Happiness);
         y = SoftChunk(c, x, y, "MORALE", new (string, Color)[]
         {
             ($"HAPPY {_sim.Happiness:F0}", hColor),
-            ($"REVOLT BELOW {Sim.HAPPINESS_LOSE:F0}", TextDim),
+            ($"REVOLT {Sim.HAPPINESS_LOSE:F0}", TextDim),
         }, bar: _sim.Happiness / 100f, barColor: hColor, markFrac: Sim.HAPPINESS_LOSE / 100f);
 
         var (demand, served) = _sim.DemandServed();
