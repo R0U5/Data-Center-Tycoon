@@ -96,4 +96,15 @@ are good news. Leave them off for a clean, calibrated economy.
 CI (`.github/workflows/build.yml`) builds with warnings-as-errors and runs the self-test, the
 balance ladder, and a headless render smoke test on every push.
 
+## Presentation
+
+The whole game wears one consistent 8-bit look: blinking `>` cursors, bevel-panel frames
+(light top-left / dark bottom-right), a generated pixel font, procedural sprites, and a
+code-generated chiptune loop. Menus and the in-game HUD share the same palette and framing.
+
+Classic touches: a **HI** score on the title, a **TOP OPERATORS** table on the end screen
+(top 5 runs by peak value, stored in `scores.dat`), a blinking **SAVED** indicator, and the
+obligatory `(c) 2026` footer. Navigation is full keyboard: arrows/WASD move, Enter selects,
+Esc backs out.
+
 See `PROJECT_NOTES.md` for the full design, the economy model, and how to re-tune the balance.

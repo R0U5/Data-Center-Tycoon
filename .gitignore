@@ -10,6 +10,8 @@ publish/
 
 # Runtime save file (created in the working directory at run time)
 save.dat
+scores.dat
+settings.dat
 
 # IDE / OS
 *.user
